@@ -313,15 +313,9 @@ def load_data_for_user(uid: str, id_token: str):
 
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
-# Require at least Customers.csv
-if customers is None:
-    st.title("Daisy Data Viewer")
-    st.warning(
-        "You need to upload at least **Customers.csv** to begin.\n\n"
-        "Use the *CSV Uploads* section in the sidebar."
-    )
-    st.stop()
-#debug
+# ----------------------------------
+# DEBUG SECTION
+# ----------------------------------
 st.subheader("🔎 Debug: Raw Storage URL test")
 
 try:
@@ -336,7 +330,17 @@ try:
 
 except Exception as e:
     st.error(f"URL test error: {e}")
-#end debug
+    
+
+# Require at least Customers.csv
+if customers is None:
+    st.title("Daisy Data Viewer")
+    st.warning(
+        "You need to upload at least **Customers.csv** to begin.\n\n"
+        "Use the *CSV Uploads* section in the sidebar."
+    )
+    st.stop()
+
 # Notes/Bookings are optional
 optional_missing = [f for f in missing_files if f != "Customers.csv"]
 if optional_missing:
