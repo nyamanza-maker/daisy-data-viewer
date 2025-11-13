@@ -633,6 +633,7 @@ if selected_customer:
                     ]
 
                 for idx, b in cust_bookings.iterrows():
+                    st.write("DEBUG LOOP:", list(b.index))
                     is_migrated = to_bool(b.get("migrated"))
                     color = "#3cb371" if b[start_field] >= now_dt else "#888888"
                     strike = "text-decoration: line-through;" if is_migrated else ""
