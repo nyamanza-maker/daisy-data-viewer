@@ -683,14 +683,19 @@ if selected_customer:
                         st.markdown("**Notes**")
                         if is_migrated:
                             st.markdown(
-                                f"<div style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
+                                f"<pre style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
                                 f"padding: 0.5rem; border-radius: 0.25rem; border: 1px solid rgba(49, 51, 63, 0.2); "
-                                f"text-decoration: line-through; white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px;'>{notes_txt}</div>",
+                                f"text-decoration: line-through; white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            st.code(str(notes_txt), language=None)
-                            
+                            st.markdown(
+                                f"<pre style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
+                                f"padding: 0.5rem; border-radius: 0.25rem; border: 1px solid rgba(49, 51, 63, 0.2); "
+                                f"white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>",
+                                unsafe_allow_html=True
+                            )
+
                     # Per-booking migration toggle (uses BookingId)
                     booking_id = b.get("BookingId", None)
                     if booking_id is not None and booking_id != "":
