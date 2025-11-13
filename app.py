@@ -13,12 +13,12 @@ from firebase_admin import credentials, firestore
 import requests
 
 # DEBUG: Check what secrets exist
-st.sidebar.write("Available secrets:")
-st.sidebar.write(list(st.secrets.keys()))
+#st.sidebar.write("Available secrets:")
+#st.sidebar.write(list(st.secrets.keys()))
 # DEBUG: Check FIREBASE section contents
-st.sidebar.write("FIREBASE section keys:")
-if "FIREBASE" in st.secrets:
-    st.sidebar.write(list(st.secrets["FIREBASE"].keys()))
+#st.sidebar.write("FIREBASE section keys:")
+#if "FIREBASE" in st.secrets:
+#    st.sidebar.write(list(st.secrets["FIREBASE"].keys()))
 # ----------------------------------
 # Page config
 # ----------------------------------
@@ -712,11 +712,16 @@ if selected_customer:
                 cust_bookings["EndDate"] = cust_bookings["EndDateTimeParsed"].dt.strftime("%d/%m/%Y")
                 cust_bookings["EndTime"] = cust_bookings["EndDateTimeParsed"].dt.strftime("%H:%M")
 
-                filter_option = st.radio(
-                    "Show bookings:",
-                    ["All", "Past", "Next 3 Months", "Next 6 Months", "Next 12 Months"],
-                    horizontal=True
-                )
+                col1, col2 = st.columns([0.7, 0.3])
+                with col1:
+                    filter_option = st.radio(
+                        "Show bookings:",
+                        ["All", "Past", "Next 3 Months", "Next 6 Months", "Next 12 Months"],
+                        horizontal=True
+                    )
+                with col2:
+                    exclude_migrated_in_view = st.checkbox("Hide migrated", value=False, key="hide_migrated_bookings")
+
 
                 now_dt = datetime.now()
                 future_ranges = {
@@ -733,6 +738,9 @@ if selected_customer:
                         (cust_bookings["StartDateTimeParsed"] >= now_dt) &
                         (cust_bookings["StartDateTimeParsed"] <= end_date)
                     ]
+                # Filter out migrated bookings if checkbox is selected
+                if exclude_migrated_in_view:
+                    cust_bookings = cust_bookings[~cust_bookings["migrated"].map(to_bool)]
 
                 for idx, b in cust_bookings.iterrows():
                     is_migrated = to_bool(b.get("migrated", False))
