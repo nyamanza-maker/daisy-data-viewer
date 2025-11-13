@@ -348,18 +348,18 @@ customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 # ----------------------------------
 st.subheader("🔎 Debug: Raw Storage URL test")
 
-try:
-    test_path = f"franchises/{uid}/Customers.csv"
-    test_url = storage.child(test_path).get_url(id_token)
-    st.write("Test path:", test_path)
-    st.write("Download URL:", test_url)
+#try:
+#    test_path = f"franchises/{uid}/Customers.csv"
+#    test_url = storage.child(test_path).get_url(id_token)
+#    st.write("Test path:", test_path)
+#    st.write("Download URL:", test_url)
 
     # Try to HEAD the URL
-    r = requests.head(test_url)
-    st.write("HTTP HEAD status:", r.status_code)
+#    r = requests.head(test_url)
+#    st.write("HTTP HEAD status:", r.status_code)
 
-except Exception as e:
-    st.error(f"URL test error: {e}")
+#except Exception as e:
+#    st.error(f"URL test error: {e}")
 
 
 # Require at least Customers.csv
