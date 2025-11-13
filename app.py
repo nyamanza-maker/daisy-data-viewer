@@ -658,7 +658,7 @@ if selected_customer:
                         "End Time": b["EndTime"],
                     }
 
-                     for label, val in fields.items():
+                    for label, val in fields.items():
                         col1, col2 = st.columns([0.3, 0.7])
                         with col1:
                             st.markdown(f"**{label}**")
