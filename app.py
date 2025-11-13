@@ -321,7 +321,22 @@ if customers is None:
         "Use the *CSV Uploads* section in the sidebar."
     )
     st.stop()
+#debug
+st.subheader("🔎 Debug: Raw Storage URL test")
 
+try:
+    test_path = f"franchises/{uid}/Customers.csv"
+    test_url = storage.child(test_path).get_url(id_token)
+    st.write("Test path:", test_path)
+    st.write("Download URL:", test_url)
+
+    # Try to HEAD the URL
+    r = requests.head(test_url)
+    st.write("HTTP HEAD status:", r.status_code)
+
+except Exception as e:
+    st.error(f"URL test error: {e}")
+#end debug
 # Notes/Bookings are optional
 optional_missing = [f for f in missing_files if f != "Customers.csv"]
 if optional_missing:
