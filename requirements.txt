@@ -1,4 +1,8 @@
-flask
-flask-cors
-pandas
+streamlit
 pyrebase4
+firebase-admin
+google-cloud-firestore
+google-cloud-storage
+pandas
+python-dotenv
+setuptools
