@@ -659,17 +659,15 @@ if selected_customer:
                     }
 
                     for label, val in fields.items():
-                        col1, col2 = st.columns([0.3, 0.7])
-                        with col1:
-                            st.markdown(f"**{label}**")
-                        with col2:
-                            if is_migrated:
-                                st.markdown(
-                                    f"<code style='text-decoration: line-through;'>{val}</code>",
-                                    unsafe_allow_html=True
-                                )
-                            else:
-                                st.code(str(val), language=None)
+                        cols = st.columns([0.3, 0.7])
+                        cols[0].markdown(f"**{label}**")
+                        if is_migrated:
+                            cols[1].markdown(
+                                f"<code style='text-decoration: line-through;'>{val}</code>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            cols[1].code(str(val), language=None)
 
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
