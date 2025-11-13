@@ -238,7 +238,7 @@ def add_migration_flags(customers: pd.DataFrame,
     if "BookingId" in bookings.columns:
     bookings["migrated"] = bookings["BookingId"].apply(
         lambda bid: get_migrated(uid, "bookings", bid)
-    )
+        )
     else:
         bookings["migrated"] = False
 
