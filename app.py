@@ -32,7 +32,7 @@ firebase_config = {
     "messagingSenderId": firebase_section["messaging_sender_id"],
     "appId": firebase_section["app_id"],
     # Not using RTDB, but some pyrebase versions require this key to exist:
-    "databaseURL": firebase_section.get("database_url", "https://dummy.firebaseio.com"),
+    "databaseURL": firebase_section.get("database_url", "https://daisy-data-viewer.firebaseio.com"),
 }
 
 firebase = pyrebase.initialize_app(firebase_config)
@@ -119,17 +119,25 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
 def file_exists(uid: str, filename: str, id_token: str) -> bool:
     path = storage_path_for(uid, filename)
     try:
-        storage.child(path).get_url(id_token)
+        # Try to get metadata instead of URL (more reliable)
+        storage.child(path).get_metadata(id_token)
         return True
     except Exception:
         return False
 
 
+
 def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs) -> pd.DataFrame:
     path = storage_path_for(uid, filename)
-    url = storage.child(path).get_url(id_token)
-    return pd.read_csv(url, **read_csv_kwargs)
 
+    # Download raw bytes
+    try:
+        file_bytes = storage.child(path).get(id_token)
+    except Exception as e:
+        raise RuntimeError(f"Failed to download {filename}: {e}")
+
+    # Convert bytes → DataFrame
+    return pd.read_csv(io.BytesIO(file_bytes), **read_csv_kwargs)
 
 # ----------------------------------
 # Helpers
