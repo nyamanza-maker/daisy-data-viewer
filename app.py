@@ -647,7 +647,7 @@ if selected_customer:
                         unsafe_allow_html=True
                     )
 
-                     fields = {
+                    fields = {
                         "Service": b.get("Service", ""),
                         "Staff": b.get("Staff", ""),
                         "Price": b.get("Price", ""),
