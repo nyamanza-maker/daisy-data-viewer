@@ -111,10 +111,14 @@ def init_admin_db():
 
     try:
         admin_json = st.secrets["FIREBASE"]["admin_json"]
-        if isinstance(admin_json, str):
+        
+        # If it's already a dict (TOML table), use it directly
+        if isinstance(admin_json, dict):
+            cred_info = dict(admin_json)
+        elif isinstance(admin_json, str):
             cred_info = json.loads(admin_json)
         else:
-            cred_info = dict(admin_json)
+            cred_info = admin_json
 
         if not firebase_admin._apps:
             cred = credentials.Certificate(cred_info)
