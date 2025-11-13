@@ -1,6 +1,7 @@
 import io
 import json
 from datetime import datetime, timedelta
+from time import time  # for rate limiting / lockout
 
 import pandas as pd
 import streamlit as st
@@ -10,6 +11,8 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 import requests
+
+
 # ----------------------------------
 # Page config
 # ----------------------------------
@@ -37,6 +40,32 @@ firebase_config = {
 firebase = pyrebase.initialize_app(firebase_config)
 auth = firebase.auth()
 storage = firebase.storage()
+
+
+# ----------------------------------
+# Friendly Firebase login error parser
+# ----------------------------------
+def parse_firebase_login_error(e: Exception) -> str:
+    raw = str(e)
+
+    if "INVALID_EMAIL" in raw:
+        return "The email address format is invalid."
+
+    if "EMAIL_NOT_FOUND" in raw:
+        return "No account exists with this email."
+
+    if "INVALID_PASSWORD" in raw or "INVALID_LOGIN_CREDENTIALS" in raw or "wrong password" in raw.lower():
+        return "Incorrect password. Please try again."
+
+    if "USER_DISABLED" in raw:
+        return "This account has been disabled. Please contact support."
+
+    if "TOO_MANY_ATTEMPTS_TRY_LATER" in raw:
+        return "Too many login attempts. Please try again later."
+
+    # Generic fallback
+    return "Authentication failed. Please check your email and password."
+
 
 # ----------------------------------
 # Firebase Admin (Firestore)
@@ -112,20 +141,10 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
     storage.child(path).put(io.BytesIO(content), id_token)
 
 
-#def file_exists(uid: str, filename: str, id_token: str) -> bool:
-#    path = storage_path_for(uid, filename)
-#    try:
-        # Generate a download URL
-#        url = storage.child(path).get_url(id_token)
-
-        # Do a HEAD request to check if object exists
- #       resp = requests.head(url)
-
-#        return resp.status_code == 200
-#    except:
-#        return False
-    
 def file_exists(uid: str, filename: str, id_token: str) -> bool:
+    """
+    Check existence using Firebase Storage REST API with a Bearer token.
+    """
     path = f"franchises/{uid}/{filename}"
 
     url = f"https://firebasestorage.googleapis.com/v0/b/{firebase_config['storageBucket']}/o/{path.replace('/', '%2F')}"
@@ -135,31 +154,14 @@ def file_exists(uid: str, filename: str, id_token: str) -> bool:
     try:
         r = requests.get(url, headers=headers)
         return r.status_code == 200
-    except:
-        return False
-
-    
-
-#def file_exists(uid: str, filename: str, id_token: str) -> bool:
-    """
-    Check existence via metadata (no false positives).
-    """
-    try:
-        storage.child(storage_path_for(uid, filename)).get_metadata(id_token)
-        return True
     except Exception:
         return False
 
 
-#def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs) -> pd.DataFrame:
-    path = storage_path_for(uid, filename)
-    try:
-        file_bytes = storage.child(path).get(id_token)
-    except Exception as e:
-        raise RuntimeError(f"Failed to download {filename}: {e}")
-    return pd.read_csv(io.BytesIO(file_bytes), **read_csv_kwargs)
-
 def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs):
+    """
+    Download CSV via Firebase Storage REST API with auth.
+    """
     path = f"franchises/{uid}/{filename}"
 
     url = (
@@ -175,6 +177,8 @@ def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs
         raise RuntimeError(f"Failed to download {filename}: {r.text}")
 
     return pd.read_csv(io.BytesIO(r.content), **read_csv_kwargs)
+
+
 # ----------------------------------
 # Misc helpers
 # ----------------------------------
@@ -224,37 +228,84 @@ def add_migration_flags(customers: pd.DataFrame,
 
 
 # ----------------------------------
-# Authentication UI
+# Auth state + rate limiting state
 # ----------------------------------
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
 
+if "login_attempts" not in st.session_state:
+    st.session_state["login_attempts"] = 0
+
+if "lockout_until" not in st.session_state:
+    st.session_state["lockout_until"] = 0
+
+
+# ----------------------------------
+# Authentication UI (Sidebar)
+# ----------------------------------
 with st.sidebar:
     st.header("Sign in")
+
+    now = time()
+    MAX_ATTEMPTS = 5
+    LOCKOUT_DURATION = 60 * 5  # 5 minutes
 
     if st.session_state["auth"] is None:
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            try:
-                user = auth.sign_in_with_email_and_password(email, password)
-                uid = user["localId"]
-                id_token = user["idToken"]
-                st.session_state["auth"] = {
-                    "email": email,
-                    "uid": uid,
-                    "idToken": id_token,
-                }
-                st.success("Signed in.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Login failed: {e}")
+
+        # Lockout check
+        if st.session_state["lockout_until"] > now:
+            remaining = int(st.session_state["lockout_until"] - now)
+            st.error(f"Too many failed attempts. Try again in {remaining} seconds.")
+        else:
+            if st.button("Login"):
+                # Check if attempts already maxed out
+                if st.session_state["login_attempts"] >= MAX_ATTEMPTS:
+                    st.session_state["lockout_until"] = now + LOCKOUT_DURATION
+                    st.session_state["login_attempts"] = 0
+                    st.error("Too many failed attempts. Locked out for 5 minutes.")
+                else:
+                    try:
+                        user = auth.sign_in_with_email_and_password(email, password)
+                        account = auth.get_account_info(user["idToken"])["users"][0]
+
+                        # Enforce email verification
+                        if not account.get("emailVerified", False):
+                            st.session_state["login_attempts"] += 1
+                            st.error("Please verify your email address before logging in.")
+                        else:
+                            # Successful login
+                            st.session_state["login_attempts"] = 0
+                            st.session_state["auth"] = {
+                                "email": email,
+                                "uid": account["localId"],
+                                "idToken": user["idToken"],
+                            }
+                            st.success("Signed in.")
+                            st.rerun()
+
+                    except Exception as e:
+                        st.session_state["login_attempts"] += 1
+                        msg = parse_firebase_login_error(e)
+                        st.error(msg)
+
+        # Resend verification email (only if not locked out)
+        if email and password and st.session_state["lockout_until"] <= now:
+            if st.button("Resend verification email"):
+                try:
+                    temp_user = auth.sign_in_with_email_and_password(email, password)
+                    auth.send_email_verification(temp_user["idToken"])
+                    st.success("Verification email sent.")
+                except Exception:
+                    st.error("Unable to send verification email. Check your email and password.")
     else:
         st.write(f"Signed in as: **{st.session_state['auth']['email']}**")
         if st.button("Logout"):
             st.session_state["auth"] = None
             st.rerun()
 
+# If still not authenticated, stop here
 if st.session_state["auth"] is None:
     st.title("Daisy Data Viewer")
     st.info("Please sign in to begin.")
@@ -262,6 +313,7 @@ if st.session_state["auth"] is None:
 
 uid = st.session_state["auth"]["uid"]
 id_token = st.session_state["auth"]["idToken"]
+
 
 # ----------------------------------
 # CSV Upload section (AFTER auth!)
@@ -293,6 +345,7 @@ with st.sidebar:
     st.write("Customers.csv:", file_exists(uid, "Customers.csv", id_token))
     st.write("Notes.csv:", file_exists(uid, "Notes.csv", id_token))
     st.write("Bookings.csv:", file_exists(uid, "Bookings.csv", id_token))
+
 
 # ----------------------------------
 # Load Data from Firebase Storage
@@ -344,25 +397,8 @@ def load_data_for_user(uid: str, id_token: str):
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
 # ----------------------------------
-# DEBUG SECTION
-# ----------------------------------
-st.subheader("🔎 Debug: Raw Storage URL test")
-
-#try:
-#    test_path = f"franchises/{uid}/Customers.csv"
-#    test_url = storage.child(test_path).get_url(id_token)
-#    st.write("Test path:", test_path)
-#    st.write("Download URL:", test_url)
-
-    # Try to HEAD the URL
-#    r = requests.head(test_url)
-#    st.write("HTTP HEAD status:", r.status_code)
-
-#except Exception as e:
-#    st.error(f"URL test error: {e}")
-
-
 # Require at least Customers.csv
+# ----------------------------------
 if customers is None:
     st.title("Daisy Data Viewer")
     st.warning(
@@ -390,6 +426,7 @@ if bookings is None:
     ])
 
 customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid)
+
 
 # ----------------------------------
 # Sidebar Search
@@ -434,12 +471,13 @@ else:
     matched_customlers = customers.sort_values("DisplayName")
     matched_customers = matched_customlers  # just to avoid typo issues :)
 
+
 # Filter: only future appointments (if bookings present)
 only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
 if only_future and not bookings.empty and "CustomerId" in bookings.columns:
     start_col = next((c for c in bookings.columns if "startdatetime" in c.lower()), None)
     if start_col:
-        start_dt = pd.to_datetime(bookings[start_col], errors="coerce", infer_datetime_format=True)
+        start_dt = pd.to_datetime(bookings[start_col], errors="coerce")
         future_ids = bookings.loc[start_dt >= datetime.now(), "CustomerId"].unique().tolist()
         matched_customers = matched_customers[matched_customers["CustomerId"].isin(future_ids)]
     else:
@@ -457,6 +495,7 @@ st.sidebar.write(f"🧾 {len(matched_customers)} shown ({customers.shape[0]} tot
 
 options = matched_customers["DisplayName"].tolist()
 selected_customer = st.sidebar.radio("Matches", options) if options else None
+
 
 # ----------------------------------
 # Main Display
@@ -529,10 +568,10 @@ if selected_customer:
                 st.error("Cannot find StartDateTime/EndDateTime columns in bookings.")
             else:
                 cust_bookings[start_field] = pd.to_datetime(
-                    cust_bookings[start_field], errors="coerce", infer_datetime_format=True
+                    cust_bookings[start_field], errors="coerce"
                 )
                 cust_bookings[end_field] = pd.to_datetime(
-                    cust_bookings[end_field], errors="coerce", infer_datetime_format=True
+                    cust_bookings[end_field], errors="coerce"
                 )
 
                 cust_bookings["start_date"] = cust_bookings[start_field].dt.strftime("%d/%m/%Y")
@@ -546,25 +585,25 @@ if selected_customer:
                     horizontal=True
                 )
 
-                now = datetime.now()
+                now_dt = datetime.now()
                 future_ranges = {
-                    "Next 3 Months": now + timedelta(days=90),
-                    "Next 6 Months": now + timedelta(days=180),
-                    "Next 12 Months": now + timedelta(days=365),
+                    "Next 3 Months": now_dt + timedelta(days=90),
+                    "Next 6 Months": now_dt + timedelta(days=180),
+                    "Next 12 Months": now_dt + timedelta(days=365),
                 }
 
                 if filter_option == "Past":
-                    cust_bookings = cust_bookings[cust_bookings[start_field] < now]
+                    cust_bookings = cust_bookings[cust_bookings[start_field] < now_dt]
                 elif filter_option in future_ranges:
                     end_date = future_ranges[filter_option]
                     cust_bookings = cust_bookings[
-                        (cust_bookings[start_field] >= now) &
+                        (cust_bookings[start_field] >= now_dt) &
                         (cust_bookings[start_field] <= end_date)
                     ]
 
                 for idx, b in cust_bookings.iterrows():
                     is_migrated = to_bool(b.get("migrated"))
-                    color = "#3cb371" if b[start_field] >= now else "#888888"
+                    color = "#3cb371" if b[start_field] >= now_dt else "#888888"
                     strike = "text-decoration: line-through;" if is_migrated else ""
 
                     st.markdown(
