@@ -88,13 +88,21 @@ def init_admin_db():
         return None
 
 
+# ----------------------------------
+# Firebase Admin (Firestore)
+# ----------------------------------
+# Initialize db as None at module level
+db = None
+
 def init_admin_db():
     """
     Initialise Firebase Admin SDK using FIREBASE_ADMIN_JSON secret.
     If not present, we simply don't persist migration flags.
     """
+    global db
+    
     if "FIREBASE_ADMIN_JSON" not in st.secrets:
-        st.error("❌ FIREBASE_ADMIN_JSON not found in secrets!")
+        st.sidebar.warning("⚠️ FIREBASE_ADMIN_JSON not found in secrets - migration flags won't persist!")
         return None
 
     try:
@@ -107,12 +115,50 @@ def init_admin_db():
         if not firebase_admin._apps:
             cred = credentials.Certificate(cred_info)
             firebase_admin.initialize_app(cred)
-        return firestore.client()
+        
+        db = firestore.client()
+        return db
     except Exception as e:
-        st.error(f"❌ Firestore initialization failed: {type(e).__name__}: {e}")
-        import traceback
-        st.code(traceback.format_exc())
+        st.sidebar.error(f"❌ Firestore initialization failed: {type(e).__name__}: {e}")
         return None
+
+
+def _mig_doc(uid: str, coll: str, doc_id: str):
+    """
+    Firestore path:
+      /migrations/{uid}/{coll}/{doc_id}
+    """
+    global db
+    if db is None:
+        return None
+    return db.collection("migrations").document(uid).collection(coll).document(str(doc_id))
+
+
+def set_migrated(uid: str, coll: str, doc_id: str, value: bool):
+    global db
+    if db is None:
+        return
+    doc_ref = _mig_doc(uid, coll, doc_id)
+    if doc_ref is not None:
+        doc_ref.set({"migrated": bool(value)}, merge=True)
+
+
+def get_migrated(uid: str, coll: str, doc_id: str) -> bool:
+    global db
+    if db is None:
+        return False
+    doc_ref = _mig_doc(uid, coll, doc_id)
+    if doc_ref is None:
+        return False
+    doc = doc_ref.get()
+    if doc.exists:
+        data = doc.to_dict()
+        return bool(data.get("migrated", False))
+    return False
+
+
+# Initialize the database
+db = init_admin_db()
 
 def _mig_doc(uid: str, coll: str, doc_id: str):
     if db is None:
