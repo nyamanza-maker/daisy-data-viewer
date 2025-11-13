@@ -110,6 +110,12 @@ def _mig_doc(uid: str, coll: str, doc_id: str):
 def set_migrated(uid: str, coll: str, doc_id: str, value: bool):
     if db is None:
         return
+    # DEBUG
+    st.write("DEBUG Firestore WRITE →",
+             "uid:", uid,
+             "collection:", coll,
+             "doc_id:", doc_id,
+             "value:", value)
     doc_ref = _mig_doc(uid, coll, doc_id)
     if doc_ref is not None:
         doc_ref.set({"migrated": bool(value)}, merge=True)
@@ -686,7 +692,6 @@ if selected_customer:
                     else:
                         if st.button("Mark as migrated", key=f"migrate-{idx}"):
                             set_migrated(uid, "bookings", b["bookingid"], True)
-                            st.write("DEBUG WRITE → uid:", uid, "collection:", coll, "doc:", doc_id)
                             st.rerun()
 
                     st.markdown("---")
