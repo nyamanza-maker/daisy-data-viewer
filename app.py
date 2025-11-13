@@ -668,6 +668,10 @@ if selected_customer:
                             )
                         else:
                             col2.text(str(val))
+                         # Copy button
+                        if col3.button("📋", key=f"copy-{label}-{idx}", help="Copy to clipboard"):
+                            st.code(str(val), language=None)
+                            st.toast(f"Copied {label}!", icon="✅")
 
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
