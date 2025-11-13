@@ -684,11 +684,23 @@ if selected_customer:
                         col1.markdown("**Notes**")
                         if is_migrated:
                             col2.markdown(
-                                f"<code style='text-decoration: line-through; display: block; white-space: pre-wrap; max-height: 150px; overflow-y: auto;'>{notes_txt}</code>",
+                                f"<div style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
+                                f"padding: 8px; border-radius: 4px; border: 1px solid #ddd; "
+                                f"text-decoration: line-through; white-space: pre-wrap; font-family: monospace;'>{notes_txt}</div>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            col2.code(str(notes_txt), language=None)
+                            # Use markdown with scrollable div to maintain copy functionality
+                            col2.markdown(
+                                f"<div style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
+                                f"padding: 8px; border-radius: 4px; border: 1px solid #ddd; "
+                                f"white-space: pre-wrap; font-family: monospace; position: relative;'>"
+                                f"<button onclick='navigator.clipboard.writeText(`{notes_txt.replace('`', '\\`')}`)' "
+                                f"style='position: absolute; top: 4px; right: 4px; background: white; border: 1px solid #ccc; "
+                                f"border-radius: 3px; padding: 2px 6px; cursor: pointer; font-size: 12px;'>📋</button>"
+                                f"{notes_txt}</div>",
+                                unsafe_allow_html=True
+                            )
 
                     # Per-booking migration toggle (uses BookingId)
                     booking_id = b.get("BookingId", None)
