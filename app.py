@@ -240,6 +240,10 @@ def add_migration_flags(customers: pd.DataFrame,
                         notes: pd.DataFrame,
                         bookings: pd.DataFrame,
                         uid: str):
+    """
+    Adds migration flags by batch-reading from Firestore.
+    Much faster than individual reads per record.
+    """
     if customers is None:
         customers = pd.DataFrame()
     if notes is None:
@@ -247,27 +251,66 @@ def add_migration_flags(customers: pd.DataFrame,
     if bookings is None:
         bookings = pd.DataFrame()
 
-    if "CustomerId" in customers.columns:
-        customers["Migrated"] = customers["CustomerId"].apply(
-            lambda cid: get_migrated(uid, "customers", cid)
-        )
-    else:
+    if db is None:
+        # No Firestore, mark everything as not migrated
         customers["Migrated"] = False
-
-    if "CustomerId" in notes.columns:
-        notes["Migrated"] = notes["CustomerId"].apply(
-            lambda cid: get_migrated(uid, "notes", cid)
-        )
-    else:
         notes["Migrated"] = False
-
-    if "BookingId" in bookings.columns:
-        bookings["migrated"] = bookings["BookingId"].apply(
-            lambda bid: get_migrated(uid, "bookings", bid)
-        )
-    else:
         bookings["migrated"] = False
+        return customers, notes, bookings
 
+    try:
+        # Batch read all migrations for this user
+        migrations_ref = db.collection("migrations").document(uid)
+        
+        # Get all customer migrations
+        customer_migrations = {}
+        if "CustomerId" in customers.columns:
+            cust_docs = migrations_ref.collection("customers").stream()
+            for doc in cust_docs:
+                customer_migrations[doc.id] = doc.to_dict().get("migrated", False)
+        
+        # Get all note migrations
+        note_migrations = {}
+        if "CustomerId" in notes.columns:
+            note_docs = migrations_ref.collection("notes").stream()
+            for doc in note_docs:
+                note_migrations[doc.id] = doc.to_dict().get("migrated", False)
+        
+        # Get all booking migrations
+        booking_migrations = {}
+        if "BookingId" in bookings.columns:
+            booking_docs = migrations_ref.collection("bookings").stream()
+            for doc in booking_docs:
+                booking_migrations[doc.id] = doc.to_dict().get("migrated", False)
+        
+        # Apply to dataframes
+        if "CustomerId" in customers.columns:
+            customers["Migrated"] = customers["CustomerId"].apply(
+                lambda cid: customer_migrations.get(str(cid), False)
+            )
+        else:
+            customers["Migrated"] = False
+        
+        if "CustomerId" in notes.columns:
+            notes["Migrated"] = notes["CustomerId"].apply(
+                lambda cid: note_migrations.get(str(cid), False)
+            )
+        else:
+            notes["Migrated"] = False
+        
+        if "BookingId" in bookings.columns:
+            bookings["migrated"] = bookings["BookingId"].apply(
+                lambda bid: booking_migrations.get(str(bid), False)
+            )
+        else:
+            bookings["migrated"] = False
+        
+    except Exception as e:
+        st.warning(f"Could not load migration flags: {e}")
+        customers["Migrated"] = False
+        notes["Migrated"] = False
+        bookings["migrated"] = False
+    
     return customers, notes, bookings
 
 
