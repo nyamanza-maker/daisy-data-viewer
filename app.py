@@ -78,7 +78,7 @@ def parse_firebase_login_error(e: Exception) -> str:
 # Initialize db as None at module level
 db = None
 
-pythondef init_admin_db():
+def init_admin_db():
     """
     Initialise Firebase Admin SDK using FIREBASE admin_json secret.
     If not present, we simply don't persist migration flags.
