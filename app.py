@@ -71,28 +71,6 @@ def parse_firebase_login_error(e: Exception) -> str:
     return "Authentication failed. Please check your email and password."
 
 
-# ----------------------------------
-# Firebase Admin (Firestore)
-# ----------------------------------
-def init_admin_db():
-    if "FIREBASE_ADMIN_JSON" not in st.secrets:
-        return None
-
-    try:
-        admin_json = st.secrets["FIREBASE_ADMIN_JSON"]
-        if isinstance(admin_json, str):
-            cred_info = json.loads(admin_json)
-        else:
-            cred_info = admin_json
-
-        if not firebase_admin._apps:
-            cred = credentials.Certificate(cred_info)
-            firebase_admin.initialize_app(cred)
-        return firestore.client()
-    except Exception as e:
-        st.warning(f"Could not initialise Firestore (migration flags won't persist): {e}")
-        return None
-
 
 # ----------------------------------
 # Firebase Admin (Firestore)
