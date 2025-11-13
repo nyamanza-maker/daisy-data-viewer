@@ -647,7 +647,7 @@ if selected_customer:
                         unsafe_allow_html=True
                     )
 
-                    fields = {
+                     fields = {
                         "Service": b.get("Service", ""),
                         "Staff": b.get("Staff", ""),
                         "Price": b.get("Price", ""),
@@ -659,16 +659,17 @@ if selected_customer:
                     }
 
                     for label, val in fields.items():
-                        col1, col2 = st.columns([0.2, 0.8])
-                        col1.markdown(f"**{label}:**")
+                        col1, col2, col3 = st.columns([0.3, 0.6, 0.1])
+                        col1.markdown(f"**{label}**")
                         if is_migrated:
                             col2.markdown(
-                                f"<span style='text-decoration: line-through;'>{val}</span>",
+                                f"<code style='text-decoration: line-through;'>{val}</code>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            col2.text(str(val))
-                         # Copy button
+                            col2.code(str(val), language=None)
+                        
+                        # Copy button
                         if col3.button("📋", key=f"copy-{label}-{idx}", help="Copy to clipboard"):
                             st.code(str(val), language=None)
                             st.toast(f"Copied {label}!", icon="✅")
