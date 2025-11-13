@@ -12,6 +12,9 @@ from firebase_admin import credentials, firestore
 
 import requests
 
+# DEBUG: Check what secrets exist
+st.sidebar.write("Available secrets:")
+st.sidebar.write(list(st.secrets.keys()))
 
 # ----------------------------------
 # Page config
