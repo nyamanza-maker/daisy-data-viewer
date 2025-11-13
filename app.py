@@ -116,14 +116,13 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
     storage.child(path).put(io.BytesIO(content), id_token)
 
 
-def file_exists(uid: str, filename: str, id_token: str) -> bool:
-    path = storage_path_for(uid, filename)
+def file_exists(uid, filename, id_token):
     try:
-        # Try to get metadata instead of URL (more reliable)
-        storage.child(path).get_metadata(id_token)
+        storage.child(storage_path_for(uid, filename)).get_metadata(id_token)
         return True
-    except Exception:
+    except:
         return False
+
 
 
 
@@ -194,32 +193,28 @@ if "auth" not in st.session_state:
     st.session_state["auth"] = None
 
 with st.sidebar:
-    st.header("Sign in")
+    st.header("CSV Uploads")
 
-    if st.session_state["auth"] is None:
-        email = st.text_input("Email")
-        password = st.text_input("Password", type="password")
-        if st.button("Login"):
-            try:
-                user = auth.sign_in_with_email_and_password(email, password)
-                # user dict has idToken and localId
-                uid = user["localId"]
-                id_token = user["idToken"]
+    cust_file = st.file_uploader("Upload Customers.csv", type=["csv"], key="cust_up")
+    notes_file = st.file_uploader("Upload Notes.csv", type=["csv"], key="notes_up")
+    book_file = st.file_uploader("Upload Bookings.csv", type=["csv"], key="book_up")
 
-                st.session_state["auth"] = {
-                    "email": email,
-                    "uid": uid,
-                    "idToken": id_token,
-                }
-                st.success("Signed in.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Login failed: {e}")
-    else:
-        st.write(f"Signed in as: **{st.session_state['auth']['email']}**")
-        if st.button("Logout"):
-            st.session_state["auth"] = None
+    if st.button("Upload Now"):
+        try:
+            if cust_file:
+                upload_bytes(uid, "Customers.csv", cust_file.read(), id_token)
+
+            if notes_file:
+                upload_bytes(uid, "Notes.csv", notes_file.read(), id_token)
+
+            if book_file:
+                upload_bytes(uid, "Bookings.csv", book_file.read(), id_token)
+
+            st.success("Upload complete. Reloading…")
             st.rerun()
+        except Exception as e:
+            st.error(f"Upload failed: {e}")
+
 
 # If not authenticated, stop here (only login form visible)
 if st.session_state["auth"] is None:
@@ -259,43 +254,52 @@ with st.sidebar:
 # ----------------------------------
 
 def load_data_for_user(uid: str, id_token: str):
-    required_files = ["Customers.csv", "Notes.csv", "Bookings.csv"]
-    missing = [f for f in required_files if not file_exists(uid, f, id_token)]
+    # Check which files actually exist
+    has_customers = file_exists(uid, "Customers.csv", id_token)
+    has_notes = file_exists(uid, "Notes.csv", id_token)
+    has_bookings = file_exists(uid, "Bookings.csv", id_token)
 
-    if missing:
-        return None, None, None, missing
+    customers = None
+    notes = None
+    bookings = None
 
-    # Read CSVs
-    customers = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
-    notes = download_csv_as_df(uid, "Notes.csv", id_token, low_memory=False)
-    bookings = download_csv_as_df(uid, "Bookings.csv", id_token, low_memory=False)
+    missing = []
+    if not has_customers:
+        missing.append("Customers.csv")
+    if not has_notes:
+        missing.append("Notes.csv")
+    if not has_bookings:
+        missing.append("Bookings.csv")
 
-    # Select columns similar to your original logic
-    cust_cols = [c for c in customers.columns if c in [
-        "CustomerId", "FirstName", "LastName", "CompanyName",
-        "Telephone", "SMS", "PhysicalAddress", "Gender", "CustomerName"
-    ]]
-    if not cust_cols:
-        cust_cols = customers.columns.tolist()
-    customers = customers[cust_cols].copy()
+    # Load customers if present
+    if has_customers:
+        customers = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
+        cust_cols = [
+            c for c in customers.columns if c in 
+            ["CustomerId", "FirstName", "LastName", "CompanyName",
+             "Telephone", "SMS", "PhysicalAddress", "Gender", "CustomerName"]
+        ]
+        customers = customers[cust_cols].copy() if cust_cols else customers.copy()
 
-    note_cols = [c for c in notes.columns if c in ["CustomerId", "CustomerName", "NoteText"]]
-    if not note_cols:
-        note_cols = notes.columns.tolist()
-    notes = notes[note_cols].copy()
+    # Load notes (optional)
+    if has_notes:
+        notes = download_csv_as_df(uid, "Notes.csv", id_token, low_memory=False)
+        note_cols = [c for c in notes.columns if c in ["CustomerId", "CustomerName", "NoteText"]]
+        notes = notes[note_cols].copy() if note_cols else notes.copy()
 
-    book_cols = [c for c in bookings.columns if c in [
-        "CustomerId", "CustomerName", "Staff", "Service",
-        "StartDateTime", "EndDateTime", "Notes", "RecurringAppointment", "Price"
-    ]]
-    if not book_cols:
-        book_cols = bookings.columns.tolist()
-    bookings = bookings[book_cols].copy()
+    # Load bookings (optional)
+    if has_bookings:
+        bookings = download_csv_as_df(uid, "Bookings.csv", id_token, low_memory=False)
+        book_cols = [
+            c for c in bookings.columns if c in
+            ["CustomerId", "CustomerName", "Staff", "Service",
+             "StartDateTime", "EndDateTime", "Notes", 
+             "RecurringAppointment", "Price"]
+        ]
+        bookings = bookings[book_cols].copy() if book_cols else bookings.copy()
 
-    # Add migration flags from Firestore
-    customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid)
+    return customers, notes, bookings, missing
 
-    return customers, notes, bookings, []
 
 
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
