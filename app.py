@@ -78,7 +78,7 @@ def parse_firebase_login_error(e: Exception) -> str:
 # Initialize db as None at module level
 db = None
 
-def init_admin_db():
+pythondef init_admin_db():
     """
     Initialise Firebase Admin SDK using FIREBASE admin_json secret.
     If not present, we simply don't persist migration flags.
@@ -93,15 +93,12 @@ def init_admin_db():
     try:
         admin_data = st.secrets["FIREBASE"]["admin_json"]
         
-        # Handle different formats
+        # Convert AttrDict or dict to regular dict, or parse JSON string
         if isinstance(admin_data, str):
-            # It's a JSON string, parse it
             cred_info = json.loads(admin_data)
-        elif isinstance(admin_data, dict):
-            # It's already a dict, use it directly
-            cred_info = dict(admin_data)
         else:
-            raise ValueError(f"Unexpected admin_json type: {type(admin_data)}")
+            # Handle dict, AttrDict, or any dict-like object
+            cred_info = dict(admin_data)
 
         if not firebase_admin._apps:
             cred = credentials.Certificate(cred_info)
