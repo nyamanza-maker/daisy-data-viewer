@@ -659,7 +659,7 @@ if selected_customer:
                     }
 
                     for label, val in fields.items():
-                        col1, col2, col3 = st.columns([0.3, 0.6, 0.1])
+                        col1, col2 = st.columns([0.3, 0.7])
                         col1.markdown(f"**{label}**")
                         if is_migrated:
                             col2.markdown(
@@ -668,11 +668,6 @@ if selected_customer:
                             )
                         else:
                             col2.code(str(val), language=None)
-                        
-                        # Copy button
-                        if col3.button("📋", key=f"copy-{label}-{idx}", help="Copy to clipboard"):
-                            st.code(str(val), language=None)
-                            st.toast(f"Copied {label}!", icon="✅")
 
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
