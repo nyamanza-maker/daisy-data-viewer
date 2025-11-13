@@ -658,16 +658,25 @@ if selected_customer:
                         "End Time": b["EndTime"],
                     }
 
+                    # Reduce spacing between booking fields
+                    st.markdown("""
+                        <style>
+                        div[data-testid="stVerticalBlock"] > div:has(div.stCodeBlock) {
+                            margin-bottom: -1rem;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+
                     for label, val in fields.items():
-                        cols = st.columns([0.3, 0.7])
-                        cols[0].markdown(f"**{label}**")
+                        col1, col2 = st.columns([0.3, 0.7])
+                        col1.markdown(f"**{label}**")
                         if is_migrated:
-                            cols[1].markdown(
+                            col2.markdown(
                                 f"<code style='text-decoration: line-through;'>{val}</code>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            cols[1].code(str(val), language=None)
+                            col2.code(str(val), language=None)
 
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
