@@ -680,28 +680,17 @@ if selected_customer:
 
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
-                        col1, col2 = st.columns([0.3, 0.7])
-                        col1.markdown("**Notes**")
+                        st.markdown("**Notes**")
                         if is_migrated:
-                            col2.markdown(
+                            st.markdown(
                                 f"<div style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
-                                f"padding: 8px; border-radius: 4px; border: 1px solid #ddd; "
-                                f"text-decoration: line-through; white-space: pre-wrap; font-family: monospace;'>{notes_txt}</div>",
+                                f"padding: 0.5rem; border-radius: 0.25rem; border: 1px solid rgba(49, 51, 63, 0.2); "
+                                f"text-decoration: line-through; white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px;'>{notes_txt}</div>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            # Use markdown with scrollable div to maintain copy functionality
-                            col2.markdown(
-                                f"<div style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
-                                f"padding: 8px; border-radius: 4px; border: 1px solid #ddd; "
-                                f"white-space: pre-wrap; font-family: monospace; position: relative;'>"
-                                f"<button onclick='navigator.clipboard.writeText(`{notes_txt.replace('`', '\\`')}`)' "
-                                f"style='position: absolute; top: 4px; right: 4px; background: white; border: 1px solid #ccc; "
-                                f"border-radius: 3px; padding: 2px 6px; cursor: pointer; font-size: 12px;'>📋</button>"
-                                f"{notes_txt}</div>",
-                                unsafe_allow_html=True
-                            )
-
+                            st.code(str(notes_txt), language=None)
+                            
                     # Per-booking migration toggle (uses BookingId)
                     booking_id = b.get("BookingId", None)
                     if booking_id is not None and booking_id != "":
