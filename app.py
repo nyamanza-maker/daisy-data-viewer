@@ -1,6 +1,5 @@
 import io
 import json
-import os
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -32,7 +31,7 @@ firebase_config = {
     "messagingSenderId": firebase_section["messaging_sender_id"],
     "appId": firebase_section["app_id"],
     # Not using RTDB, but some pyrebase versions require this key to exist:
-    "databaseURL": firebase_section.get("database_url", "https://daisy-data-viewer.firebaseio.com"),
+    "databaseURL": firebase_section.get("database_url", "https://dummy.firebaseio.com"),
 }
 
 firebase = pyrebase.initialize_app(firebase_config)
@@ -116,27 +115,30 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
     storage.child(path).put(io.BytesIO(content), id_token)
 
 
-def file_exists(uid, filename, id_token):
+def file_exists(uid: str, filename: str, id_token: str) -> bool:
+    """
+    Check if a file exists by using metadata. This avoids false positives.
+    """
     try:
         storage.child(storage_path_for(uid, filename)).get_metadata(id_token)
         return True
-    except:
+    except Exception:
         return False
 
 
-
-
 def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs) -> pd.DataFrame:
+    """
+    Download CSV bytes using Pyrebase and read with pandas.
+    """
     path = storage_path_for(uid, filename)
 
-    # Download raw bytes
     try:
         file_bytes = storage.child(path).get(id_token)
     except Exception as e:
         raise RuntimeError(f"Failed to download {filename}: {e}")
 
-    # Convert bytes → DataFrame
     return pd.read_csv(io.BytesIO(file_bytes), **read_csv_kwargs)
+
 
 # ----------------------------------
 # Helpers
@@ -160,10 +162,15 @@ def add_migration_flags(customers: pd.DataFrame,
                         uid: str):
     """
     Adds 'Migrated' (customers, notes) and 'migrated' (bookings) columns based on Firestore flags.
-
-    We keep the same semantics you used before:
-    migration is per CustomerId (not per row).
+    Migration is per CustomerId.
     """
+    if customers is None:
+        customers = pd.DataFrame()
+    if notes is None:
+        notes = pd.DataFrame()
+    if bookings is None:
+        bookings = pd.DataFrame()
+
     # Customers
     if "CustomerId" in customers.columns:
         customers["Migrated"] = customers["CustomerId"].apply(
@@ -193,28 +200,30 @@ if "auth" not in st.session_state:
     st.session_state["auth"] = None
 
 with st.sidebar:
-    st.header("CSV Uploads")
+    st.header("Sign in")
 
-    cust_file = st.file_uploader("Upload Customers.csv", type=["csv"], key="cust_up")
-    notes_file = st.file_uploader("Upload Notes.csv", type=["csv"], key="notes_up")
-    book_file = st.file_uploader("Upload Bookings.csv", type=["csv"], key="book_up")
-
-    if st.button("Upload Now"):
-        try:
-            if cust_file:
-                upload_bytes(uid, "Customers.csv", cust_file.read(), id_token)
-
-            if notes_file:
-                upload_bytes(uid, "Notes.csv", notes_file.read(), id_token)
-
-            if book_file:
-                upload_bytes(uid, "Bookings.csv", book_file.read(), id_token)
-
-            st.success("Upload complete. Reloading…")
+    if st.session_state["auth"] is None:
+        email = st.text_input("Email")
+        password = st.text_input("Password", type="password")
+        if st.button("Login"):
+            try:
+                user = auth.sign_in_with_email_and_password(email, password)
+                uid = user["localId"]
+                id_token = user["idToken"]
+                st.session_state["auth"] = {
+                    "email": email,
+                    "uid": uid,
+                    "idToken": id_token,
+                }
+                st.success("Signed in.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Login failed: {e}")
+    else:
+        st.write(f"Signed in as: **{st.session_state['auth']['email']}**")
+        if st.button("Logout"):
+            st.session_state["auth"] = None
             st.rerun()
-        except Exception as e:
-            st.error(f"Upload failed: {e}")
-
 
 # If not authenticated, stop here (only login form visible)
 if st.session_state["auth"] is None:
@@ -230,21 +239,22 @@ id_token = st.session_state["auth"]["idToken"]
 with st.sidebar:
     st.header("CSV Uploads")
 
-    st.caption("Upload your three CSV files. They will be stored securely in Firebase Storage.")
+    st.caption("Upload any of your three CSV files. They will be stored securely in Firebase Storage.")
 
     cust_file = st.file_uploader("Customers.csv", type=["csv"], key="cust_up")
     notes_file = st.file_uploader("Notes.csv", type=["csv"], key="notes_up")
     book_file = st.file_uploader("Bookings.csv", type=["csv"], key="book_up")
 
-    if st.button("Upload selected"):
+    if st.button("Upload Now"):
         try:
-            if cust_file:
-                upload_bytes(uid, "Customers.csv", cust_file.getvalue(), id_token)
-            if notes_file:
-                upload_bytes(uid, "Notes.csv", notes_file.getvalue(), id_token)
-            if book_file:
-                upload_bytes(uid, "Bookings.csv", book_file.getvalue(), id_token)
-            st.success("Upload complete. App will reload to use new data.")
+            if cust_file is not None:
+                upload_bytes(uid, "Customers.csv", cust_file.read(), id_token)
+            if notes_file is not None:
+                upload_bytes(uid, "Notes.csv", notes_file.read(), id_token)
+            if book_file is not None:
+                upload_bytes(uid, "Bookings.csv", book_file.read(), id_token)
+
+            st.success("Upload complete. Reloading…")
             st.rerun()
         except Exception as e:
             st.error(f"Upload failed: {e}")
@@ -254,7 +264,7 @@ with st.sidebar:
 # ----------------------------------
 
 def load_data_for_user(uid: str, id_token: str):
-    # Check which files actually exist
+    # Which files exist?
     has_customers = file_exists(uid, "Customers.csv", id_token)
     has_notes = file_exists(uid, "Notes.csv", id_token)
     has_bookings = file_exists(uid, "Bookings.csv", id_token)
@@ -271,29 +281,29 @@ def load_data_for_user(uid: str, id_token: str):
     if not has_bookings:
         missing.append("Bookings.csv")
 
-    # Load customers if present
+    # Customers (required)
     if has_customers:
         customers = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
         cust_cols = [
-            c for c in customers.columns if c in 
+            c for c in customers.columns if c in
             ["CustomerId", "FirstName", "LastName", "CompanyName",
              "Telephone", "SMS", "PhysicalAddress", "Gender", "CustomerName"]
         ]
         customers = customers[cust_cols].copy() if cust_cols else customers.copy()
 
-    # Load notes (optional)
+    # Notes (optional)
     if has_notes:
         notes = download_csv_as_df(uid, "Notes.csv", id_token, low_memory=False)
         note_cols = [c for c in notes.columns if c in ["CustomerId", "CustomerName", "NoteText"]]
         notes = notes[note_cols].copy() if note_cols else notes.copy()
 
-    # Load bookings (optional)
+    # Bookings (optional)
     if has_bookings:
         bookings = download_csv_as_df(uid, "Bookings.csv", id_token, low_memory=False)
         book_cols = [
             c for c in bookings.columns if c in
             ["CustomerId", "CustomerName", "Staff", "Service",
-             "StartDateTime", "EndDateTime", "Notes", 
+             "StartDateTime", "EndDateTime", "Notes",
              "RecurringAppointment", "Price"]
         ]
         bookings = bookings[book_cols].copy() if book_cols else bookings.copy()
@@ -301,17 +311,39 @@ def load_data_for_user(uid: str, id_token: str):
     return customers, notes, bookings, missing
 
 
-
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
-if missing_files:
+# If Customers.csv isn't uploaded, we can't do anything useful yet.
+if customers is None:
     st.title("Daisy Data Viewer")
     st.warning(
-        "Missing files in your Firebase Storage:\n\n"
-        + "\n".join(f"- {f}" for f in missing_files)
-        + "\n\nUpload them from the sidebar to begin."
+        "You need to upload at least **Customers.csv** to begin.\n\n"
+        "Use the *CSV Uploads* section in the sidebar."
     )
     st.stop()
+
+# Warn about missing optional files
+if missing_files:
+    missing_optional = [f for f in missing_files if f != "Customers.csv"]
+    if missing_optional:
+        st.info(
+            "The following optional files are not uploaded yet:\n\n"
+            + "\n".join(f"- {f}" for f in missing_optional)
+            + "\n\nCustomers will still display, but notes/bookings may be empty."
+        )
+
+# Ensure notes/bookings are at least empty DataFrames
+if notes is None:
+    notes = pd.DataFrame(columns=["CustomerId", "CustomerName", "NoteText"])
+if bookings is None:
+    bookings = pd.DataFrame(columns=[
+        "CustomerId", "CustomerName", "Staff", "Service",
+        "StartDateTime", "EndDateTime", "Notes",
+        "RecurringAppointment", "Price"
+    ])
+
+# Add migration flags
+customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid)
 
 # ----------------------------------
 # Sidebar Search
@@ -354,16 +386,16 @@ if search_name:
 else:
     matched_customers = customers.sort_values("DisplayName")
 
-# Filter: only future appointments
+# Filter: only future appointments (only if bookings has data)
 only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
-if only_future:
+if only_future and not bookings.empty and "CustomerId" in bookings.columns:
     start_col = next((c for c in bookings.columns if "startdatetime" in c.lower()), None)
     if start_col:
         start_dt = pd.to_datetime(bookings[start_col], errors="coerce", infer_datetime_format=True)
         future_ids = bookings.loc[start_dt >= datetime.now(), "CustomerId"].unique().tolist()
         matched_customers = matched_customers[matched_customers["CustomerId"].isin(future_ids)]
     else:
-        st.sidebar.warning("StartDateTime column missing in bookings.")
+        st.sidebar.warning("StartDateTime column missing in bookings; future filter ignored.")
 
 # Filter: exclude migrated
 exclude_migrated = st.sidebar.checkbox("Exclude migrated customers", value=True)
@@ -407,10 +439,13 @@ if selected_customer:
 
     # ---- Notes ----
     st.subheader("📝 Notes")
-    cust_notes = notes[notes["CustomerId"] == customer_id]
+    if not notes.empty and "CustomerId" in notes.columns:
+        cust_notes = notes[notes["CustomerId"] == customer_id]
+    else:
+        cust_notes = pd.DataFrame()
 
     if cust_notes.empty:
-        st.info("No notes for this customer.")
+        st.info("No notes for this customer (or Notes.csv not uploaded).")
     else:
         for _, n in cust_notes.iterrows():
             st.code(n.get("NoteText", ""))
@@ -425,121 +460,123 @@ if selected_customer:
     # ---- Bookings ----
     st.subheader("📅 Bookings")
 
-    cust_bookings = bookings[bookings["CustomerId"] == customer_id].copy()
-
-    if cust_bookings.empty:
-        st.info("No bookings for this customer.")
+    if bookings.empty or "CustomerId" not in bookings.columns:
+        st.info("No bookings for this customer (or Bookings.csv not uploaded).")
     else:
-        # Normalize columns
-        cust_bookings.columns = (
-            cust_bookings.columns
-            .str.strip()
-            .str.replace("\ufeff", "", regex=False)
-            .str.lower()
-        )
+        cust_bookings = bookings[bookings["CustomerId"] == customer_id].copy()
 
-        start_field = next((c for c in cust_bookings.columns if "startdatetime" in c), None)
-        end_field = next((c for c in cust_bookings.columns if "enddatetime" in c), None)
-
-        if not start_field or not end_field:
-            st.error("Cannot find StartDateTime/EndDateTime columns in bookings.")
+        if cust_bookings.empty:
+            st.info("No bookings for this customer.")
         else:
-            cust_bookings[start_field] = pd.to_datetime(
-                cust_bookings[start_field], errors="coerce", infer_datetime_format=True
-            )
-            cust_bookings[end_field] = pd.to_datetime(
-                cust_bookings[end_field], errors="coerce", infer_datetime_format=True
-            )
-
-            cust_bookings["start_date"] = cust_bookings[start_field].dt.strftime("%d/%m/%Y")
-            cust_bookings["start_time"] = cust_bookings[start_field].dt.strftime("%H:%M")
-            cust_bookings["end_date"] = cust_bookings[end_field].dt.strftime("%d/%m/%Y")
-            cust_bookings["end_time"] = cust_bookings[end_field].dt.strftime("%H:%M")
-
-            filter_option = st.radio(
-                "Show bookings:",
-                ["All", "Past", "Next 3 Months", "Next 6 Months", "Next 12 Months"],
-                horizontal=True
+            # Normalize columns
+            cust_bookings.columns = (
+                cust_bookings.columns
+                .str.strip()
+                .str.replace("\ufeff", "", regex=False)
+                .str.lower()
             )
 
-            now = datetime.now()
-            future_ranges = {
-                "Next 3 Months": now + timedelta(days=90),
-                "Next 6 Months": now + timedelta(days=180),
-                "Next 12 Months": now + timedelta(days=365),
-            }
+            start_field = next((c for c in cust_bookings.columns if "startdatetime" in c), None)
+            end_field = next((c for c in cust_bookings.columns if "enddatetime" in c), None)
 
-            if filter_option == "Past":
-                cust_bookings = cust_bookings[cust_bookings[start_field] < now]
-            elif filter_option in future_ranges:
-                end_date = future_ranges[filter_option]
-                cust_bookings = cust_bookings[
-                    (cust_bookings[start_field] >= now) &
-                    (cust_bookings[start_field] <= end_date)
-                ]
-
-            for idx, b in cust_bookings.iterrows():
-                is_migrated = to_bool(b.get("migrated"))
-                color = "#3cb371" if b[start_field] >= now else "#888888"
-                strike = "text-decoration: line-through;" if is_migrated else ""
-
-                st.markdown(
-                    f"<div style='background-color:{color}25;padding:8px;"
-                    f"border-radius:6px;margin-bottom:6px;{strike}'>"
-                    f"<b>{b.get('staff', '')}</b> | {b.get('service', '')} | "
-                    f"{b['start_date']} {b['start_time']} → "
-                    f"{b['end_date']} {b['end_time']}"
-                    f"</div>",
-                    unsafe_allow_html=True
+            if not start_field or not end_field:
+                st.error("Cannot find StartDateTime/EndDateTime columns in bookings.")
+            else:
+                cust_bookings[start_field] = pd.to_datetime(
+                    cust_bookings[start_field], errors="coerce", infer_datetime_format=True
+                )
+                cust_bookings[end_field] = pd.to_datetime(
+                    cust_bookings[end_field], errors="coerce", infer_datetime_format=True
                 )
 
-                fields = {
-                    "Service": b.get("service", ""),
-                    "Staff": b.get("staff", ""),
-                    "Price": b.get("price", ""),
-                    "Recurring": "Yes" if to_bool(b.get("recurringappointment")) else "No",
-                    "Start Date": b["start_date"],
-                    "Start Time": b["start_time"],
-                    "End Date": b["end_date"],
-                    "End Time": b["end_time"],
+                cust_bookings["start_date"] = cust_bookings[start_field].dt.strftime("%d/%m/%Y")
+                cust_bookings["start_time"] = cust_bookings[start_field].dt.strftime("%H:%M")
+                cust_bookings["end_date"] = cust_bookings[end_field].dt.strftime("%d/%m/%Y")
+                cust_bookings["end_time"] = cust_bookings[end_field].dt.strftime("%H:%M")
+
+                filter_option = st.radio(
+                    "Show bookings:",
+                    ["All", "Past", "Next 3 Months", "Next 6 Months", "Next 12 Months"],
+                    horizontal=True
+                )
+
+                now = datetime.now()
+                future_ranges = {
+                    "Next 3 Months": now + timedelta(days=90),
+                    "Next 6 Months": now + timedelta(days=180),
+                    "Next 12 Months": now + timedelta(days=365),
                 }
 
-                for label, val in fields.items():
-                    col1, col2 = st.columns([0.2, 0.8])
-                    col1.markdown(f"**{label}:**")
+                if filter_option == "Past":
+                    cust_bookings = cust_bookings[cust_bookings[start_field] < now]
+                elif filter_option in future_ranges:
+                    end_date = future_ranges[filter_option]
+                    cust_bookings = cust_bookings[
+                        (cust_bookings[start_field] >= now) &
+                        (cust_bookings[start_field] <= end_date)
+                    ]
+
+                for idx, b in cust_bookings.iterrows():
+                    is_migrated = to_bool(b.get("migrated"))
+                    color = "#3cb371" if b[start_field] >= now else "#888888"
+                    strike = "text-decoration: line-through;" if is_migrated else ""
+
+                    st.markdown(
+                        f"<div style='background-color:{color}25;padding:8px;"
+                        f"border-radius:6px;margin-bottom:6px;{strike}'>"
+                        f"<b>{b.get('staff', '')}</b> | {b.get('service', '')} | "
+                        f"{b['start_date']} {b['start_time']} → "
+                        f"{b['end_date']} {b['end_time']}"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    fields = {
+                        "Service": b.get("service", ""),
+                        "Staff": b.get("staff", ""),
+                        "Price": b.get("price", ""),
+                        "Recurring": "Yes" if to_bool(b.get("recurringappointment")) else "No",
+                        "Start Date": b["start_date"],
+                        "Start Time": b["start_time"],
+                        "End Date": b["end_date"],
+                        "End Time": b["end_time"],
+                    }
+
+                    for label, val in fields.items():
+                        col1, col2 = st.columns([0.2, 0.8])
+                        col1.markdown(f"**{label}:**")
+                        if is_migrated:
+                            col2.markdown(
+                                f"<span style='text-decoration: line-through;'>{val}</span>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            col2.text(str(val))
+
+                    # Booking notes
+                    notes_txt = b.get("notes", "")
+                    if notes_txt:
+                        st.markdown("**Notes:**")
+                        if is_migrated:
+                            st.markdown(
+                                f"<div style='background-color:#f0f0f0;border-radius:4px;"
+                                f"padding:8px;text-decoration:line-through;'>{notes_txt}</div>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            st.text_area(
+                                "Booking Notes",
+                                value=str(notes_txt),
+                                key=f"notes-{idx}",
+                                height=100,
+                                label_visibility="collapsed",
+                            )
+
                     if is_migrated:
-                        col2.markdown(
-                            f"<span style='text-decoration: line-through;'>{val}</span>",
-                            unsafe_allow_html=True
-                        )
+                        st.success("Migrated")
                     else:
-                        col2.text(str(val))
+                        if st.button("Mark as migrated", key=f"migrate-{idx}"):
+                            set_migrated(uid, "bookings", customer_id, True)
+                            st.rerun()
 
-                # Booking notes
-                notes_txt = b.get("notes", "")
-                if notes_txt:
-                    st.markdown("**Notes:**")
-                    if is_migrated:
-                        st.markdown(
-                            f"<div style='background-color:#f0f0f0;border-radius:4px;"
-                            f"padding:8px;text-decoration:line-through;'>{notes_txt}</div>",
-                            unsafe_allow_html=True
-                        )
-                    else:
-                        st.text_area(
-                            "Booking Notes",
-                            value=str(notes_txt),
-                            key=f"notes-{idx}",
-                            height=100,
-                            label_visibility="collapsed",
-                        )
-
-                if is_migrated:
-                    st.success("Migrated")
-                else:
-                    if st.button("Mark as migrated", key=f"migrate-{idx}"):
-                        # Migration per customer (same as before)
-                        set_migrated(uid, "bookings", customer_id, True)
-                        st.rerun()
-
-                st.markdown("---")
+                    st.markdown("---")
