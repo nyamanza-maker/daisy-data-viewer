@@ -199,9 +199,17 @@ def add_migration_flags(customers: pd.DataFrame,
                         bookings: pd.DataFrame,
                         uid: str):
     """
-    Adds 'Migrated' (customers, notes) and 'migrated' (bookings) columns using Firestore.
-    Migration is per CustomerId.
+    Adds:
+      - customers["Migrated"]
+      - notes["Migrated"]
+      - bookings["migrated"]
+
+    IMPORTANT:
+    - customers & notes migration is per CustomerId
+    - bookings migration is per BookingId  (NOT CustomerId)
     """
+
+    # Safety initialization
     if customers is None:
         customers = pd.DataFrame()
     if notes is None:
@@ -209,20 +217,30 @@ def add_migration_flags(customers: pd.DataFrame,
     if bookings is None:
         bookings = pd.DataFrame()
 
+    # ----- CUSTOMERS -----
     if "CustomerId" in customers.columns:
         customers["Migrated"] = customers["CustomerId"].apply(
             lambda cid: get_migrated(uid, "customers", cid)
         )
+    else:
+        customers["Migrated"] = False
 
+    # ----- NOTES -----
     if "CustomerId" in notes.columns:
         notes["Migrated"] = notes["CustomerId"].apply(
             lambda cid: get_migrated(uid, "notes", cid)
         )
+    else:
+        notes["Migrated"] = False
 
-    if "CustomerId" in bookings.columns:
-        bookings["migrated"] = bookings["CustomerId"].apply(
-            lambda cid: get_migrated(uid, "bookings", cid)
+    # ----- BOOKINGS -----
+    # FIX: use BookingId, not CustomerId
+    if "BookingId" in bookings.columns:
+        bookings["migrated"] = bookings["BookingId"].apply(
+            lambda bid: get_migrated(uid, "bookings", bid)
         )
+    else:
+        bookings["migrated"] = False
 
     return customers, notes, bookings
 
@@ -385,7 +403,7 @@ def load_data_for_user(uid: str, id_token: str):
         bookings = download_csv_as_df(uid, "Bookings.csv", id_token, low_memory=False)
         book_cols = [
             c for c in bookings.columns if c in
-            ["CustomerId", "CustomerName", "Staff", "Service",
+            ["BookingId", "CustomerId", "CustomerName", "Staff", "Service",
              "StartDateTime", "EndDateTime", "Notes",
              "RecurringAppointment", "Price"]
         ]
@@ -660,7 +678,7 @@ if selected_customer:
                         st.success("Migrated")
                     else:
                         if st.button("Mark as migrated", key=f"migrate-{idx}"):
-                            set_migrated(uid, "bookings", customer_id, True)
+                            set_migrated(uid, "bookings", b["BookingId"], True)
                             st.rerun()
 
                     st.markdown("---")
