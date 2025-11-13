@@ -1,7 +1,7 @@
 import io
 import json
 from datetime import datetime, timedelta
-from time import time  # for rate limiting / lockout
+from time import time
 
 import pandas as pd
 import streamlit as st
@@ -33,7 +33,6 @@ firebase_config = {
     "storageBucket": firebase_section["storage_bucket"],
     "messagingSenderId": firebase_section["messaging_sender_id"],
     "appId": firebase_section["app_id"],
-    # Not using RTDB, but some pyrebase versions require this:
     "databaseURL": firebase_section.get("database_url", "https://dummy.firebaseio.com"),
 }
 
@@ -63,7 +62,6 @@ def parse_firebase_login_error(e: Exception) -> str:
     if "TOO_MANY_ATTEMPTS_TRY_LATER" in raw:
         return "Too many login attempts. Please try again later."
 
-    # Generic fallback
     return "Authentication failed. Please check your email and password."
 
 
@@ -71,10 +69,6 @@ def parse_firebase_login_error(e: Exception) -> str:
 # Firebase Admin (Firestore)
 # ----------------------------------
 def init_admin_db():
-    """
-    Initialise Firebase Admin SDK using FIREBASE_ADMIN_JSON secret.
-    If not present, we simply don't persist migration flags.
-    """
     if "FIREBASE_ADMIN_JSON" not in st.secrets:
         return None
 
@@ -98,10 +92,6 @@ db = init_admin_db()
 
 
 def _mig_doc(uid: str, coll: str, doc_id: str):
-    """
-    Firestore path:
-      /migrations/{uid}/{coll}/{doc_id}
-    """
     if db is None:
         return None
     return db.collection("migrations").document(uid).collection(coll).document(str(doc_id))
@@ -132,7 +122,6 @@ def get_migrated(uid: str, coll: str, doc_id: str) -> bool:
 # Storage helpers (Firebase Storage)
 # ----------------------------------
 def storage_path_for(uid: str, filename: str) -> str:
-    # e.g. franchises/<uid>/Customers.csv
     return f"franchises/{uid}/{filename}"
 
 
@@ -142,9 +131,6 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
 
 
 def file_exists(uid: str, filename: str, id_token: str) -> bool:
-    """
-    Check existence using Firebase Storage REST API with a Bearer token.
-    """
     path = f"franchises/{uid}/{filename}"
     url = (
         f"https://firebasestorage.googleapis.com/v0/b/"
@@ -160,9 +146,6 @@ def file_exists(uid: str, filename: str, id_token: str) -> bool:
 
 
 def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs):
-    """
-    Download CSV via Firebase Storage REST API with auth.
-    """
     path = f"franchises/{uid}/{filename}"
     url = (
         f"https://firebasestorage.googleapis.com/v0/b/"
@@ -197,13 +180,6 @@ def add_migration_flags(customers: pd.DataFrame,
                         notes: pd.DataFrame,
                         bookings: pd.DataFrame,
                         uid: str):
-    """
-    Adds:
-      - customers["Migrated"]  (per CustomerId)
-      - notes["Migrated"]      (per CustomerId)
-      - bookings["migrated"]   (per BookingId)
-    """
-
     if customers is None:
         customers = pd.DataFrame()
     if notes is None:
@@ -211,7 +187,6 @@ def add_migration_flags(customers: pd.DataFrame,
     if bookings is None:
         bookings = pd.DataFrame()
 
-    # ----- CUSTOMERS -----
     if "CustomerId" in customers.columns:
         customers["Migrated"] = customers["CustomerId"].apply(
             lambda cid: get_migrated(uid, "customers", cid)
@@ -219,7 +194,6 @@ def add_migration_flags(customers: pd.DataFrame,
     else:
         customers["Migrated"] = False
 
-    # ----- NOTES -----
     if "CustomerId" in notes.columns:
         notes["Migrated"] = notes["CustomerId"].apply(
             lambda cid: get_migrated(uid, "notes", cid)
@@ -227,7 +201,6 @@ def add_migration_flags(customers: pd.DataFrame,
     else:
         notes["Migrated"] = False
 
-    # ----- BOOKINGS (per BookingId) -----
     if "BookingId" in bookings.columns:
         bookings["migrated"] = bookings["BookingId"].apply(
             lambda bid: get_migrated(uid, "bookings", bid)
@@ -236,6 +209,20 @@ def add_migration_flags(customers: pd.DataFrame,
         bookings["migrated"] = False
 
     return customers, notes, bookings
+
+
+# ----------------------------------
+# Search history management
+# ----------------------------------
+def add_to_search_history(query: str):
+    """Add query to search history, keep last 10."""
+    if "search_history" not in st.session_state:
+        st.session_state["search_history"] = []
+    
+    query = query.strip()
+    if query and query not in st.session_state["search_history"]:
+        st.session_state["search_history"].insert(0, query)
+        st.session_state["search_history"] = st.session_state["search_history"][:10]
 
 
 # ----------------------------------
@@ -250,6 +237,9 @@ if "login_attempts" not in st.session_state:
 if "lockout_until" not in st.session_state:
     st.session_state["lockout_until"] = 0
 
+if "search_history" not in st.session_state:
+    st.session_state["search_history"] = []
+
 
 # ----------------------------------
 # Authentication UI (Sidebar)
@@ -259,13 +249,12 @@ with st.sidebar:
 
     now = time()
     MAX_ATTEMPTS = 5
-    LOCKOUT_DURATION = 60 * 5  # 5 minutes
+    LOCKOUT_DURATION = 60 * 5
 
     if st.session_state["auth"] is None:
         email = st.text_input("Email")
         password = st.text_input("Password", type="password")
 
-        # Lockout check
         if st.session_state["lockout_until"] > now:
             remaining = int(st.session_state["lockout_until"] - now)
             st.error(f"Too many failed attempts. Try again in {remaining} seconds.")
@@ -280,7 +269,6 @@ with st.sidebar:
                         user = auth.sign_in_with_email_and_password(email, password)
                         account = auth.get_account_info(user["idToken"])["users"][0]
 
-                        # Enforce email verification
                         if not account.get("emailVerified", False):
                             st.session_state["login_attempts"] += 1
                             st.error("Please verify your email address before logging in.")
@@ -299,7 +287,6 @@ with st.sidebar:
                         msg = parse_firebase_login_error(e)
                         st.error(msg)
 
-        # Resend verification email (only if not locked out)
         if email and password and st.session_state["lockout_until"] <= now:
             if st.button("Resend verification email"):
                 try:
@@ -314,7 +301,6 @@ with st.sidebar:
             st.session_state["auth"] = None
             st.rerun()
 
-# If still not authenticated, stop here
 if st.session_state["auth"] is None:
     st.title("Daisy Data Viewer")
     st.info("Please sign in to begin.")
@@ -328,37 +314,66 @@ id_token = st.session_state["auth"]["idToken"]
 # CSV Upload section (AFTER auth)
 # ----------------------------------
 with st.sidebar:
-    st.header("CSV Uploads")
-    st.caption("Upload any of your three CSV files. They will be stored securely in Firebase Storage.")
+    # Check if files exist
+    has_customers = file_exists(uid, "Customers.csv", id_token)
+    has_notes = file_exists(uid, "Notes.csv", id_token)
+    has_bookings = file_exists(uid, "Bookings.csv", id_token)
+    
+    all_uploaded = has_customers and has_notes and has_bookings
+    
+    # Collapsible upload section if all files uploaded
+    if all_uploaded:
+        with st.expander("CSV Uploads (All files uploaded ✓)", expanded=False):
+            st.caption("Upload any of your three CSV files. They will be stored securely in Firebase Storage.")
+            cust_file = st.file_uploader("Customers.csv", type=["csv"], key="cust_up")
+            notes_file = st.file_uploader("Notes.csv", type=["csv"], key="notes_up")
+            book_file = st.file_uploader("Bookings.csv", type=["csv"], key="book_up")
 
-    cust_file = st.file_uploader("Customers.csv", type=["csv"], key="cust_up")
-    notes_file = st.file_uploader("Notes.csv", type=["csv"], key="notes_up")
-    book_file = st.file_uploader("Bookings.csv", type=["csv"], key="book_up")
+            if st.button("Upload Now", key="upload_now_btn"):
+                try:
+                    if cust_file is not None:
+                        upload_bytes(uid, "Customers.csv", cust_file.getvalue(), id_token)
+                    if notes_file is not None:
+                        upload_bytes(uid, "Notes.csv", notes_file.getvalue(), id_token)
+                    if book_file is not None:
+                        upload_bytes(uid, "Bookings.csv", book_file.getvalue(), id_token)
 
-    if st.button("Upload Now", key="upload_now_btn"):
-        try:
-            if cust_file is not None:
-                upload_bytes(uid, "Customers.csv", cust_file.getvalue(), id_token)
-            if notes_file is not None:
-                upload_bytes(uid, "Notes.csv", notes_file.getvalue(), id_token)
-            if book_file is not None:
-                upload_bytes(uid, "Bookings.csv", book_file.getvalue(), id_token)
+                    st.success("Upload complete. Reloading…")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Upload failed: {e}")
+    else:
+        st.header("CSV Uploads")
+        st.caption("Upload any of your three CSV files. They will be stored securely in Firebase Storage.")
 
-            st.success("Upload complete. Reloading…")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Upload failed: {e}")
+        cust_file = st.file_uploader("Customers.csv", type=["csv"], key="cust_up")
+        notes_file = st.file_uploader("Notes.csv", type=["csv"], key="notes_up")
+        book_file = st.file_uploader("Bookings.csv", type=["csv"], key="book_up")
 
-    # Tiny debug summary for your own sanity
-    st.markdown("**Storage status:**")
-    st.write("Customers.csv:", file_exists(uid, "Customers.csv", id_token))
-    st.write("Notes.csv:", file_exists(uid, "Notes.csv", id_token))
-    st.write("Bookings.csv:", file_exists(uid, "Bookings.csv", id_token))
+        if st.button("Upload Now", key="upload_now_btn"):
+            try:
+                if cust_file is not None:
+                    upload_bytes(uid, "Customers.csv", cust_file.getvalue(), id_token)
+                if notes_file is not None:
+                    upload_bytes(uid, "Notes.csv", notes_file.getvalue(), id_token)
+                if book_file is not None:
+                    upload_bytes(uid, "Bookings.csv", book_file.getvalue(), id_token)
+
+                st.success("Upload complete. Reloading…")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Upload failed: {e}")
+
+        st.markdown("**Storage status:**")
+        st.write("Customers.csv:", "✓" if has_customers else "✗")
+        st.write("Notes.csv:", "✓" if has_notes else "✗")
+        st.write("Bookings.csv:", "✓" if has_bookings else "✗")
 
 
 # ----------------------------------
 # Load Data from Firebase Storage
 # ----------------------------------
+@st.cache_data(ttl=300)
 def load_data_for_user(uid: str, id_token: str):
     has_customers = file_exists(uid, "Customers.csv", id_token)
     has_notes = file_exists(uid, "Notes.csv", id_token)
@@ -416,7 +431,6 @@ if customers is None:
     )
     st.stop()
 
-# Notes/Bookings are optional
 optional_missing = [f for f in missing_files if f != "Customers.csv"]
 if optional_missing:
     st.info(
@@ -439,22 +453,40 @@ customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid
 
 
 # ----------------------------------
-# Sidebar Search
+# Sidebar Search with History
 # ----------------------------------
 st.sidebar.header("🔍 Search Customer")
 
+# Initialize search state
+if "current_search" not in st.session_state:
+    st.session_state["current_search"] = ""
 
-def _commit_search():
-    st.session_state["search_query"] = st.session_state.get("search_input", "")
+# Search input with on_change callback
+def update_search():
+    new_query = st.session_state.get("search_input_widget", "").strip()
+    if new_query != st.session_state["current_search"]:
+        st.session_state["current_search"] = new_query
+        if new_query:
+            add_to_search_history(new_query)
 
+search_text = st.sidebar.text_input(
+    "Enter name or company:",
+    value=st.session_state["current_search"],
+    key="search_input_widget",
+    on_change=update_search
+)
 
-if "search_query" not in st.session_state:
-    st.session_state["search_query"] = ""
-if "search_input" not in st.session_state:
-    st.session_state["search_input"] = ""
+# Show search history
+if st.session_state["search_history"]:
+    with st.sidebar.expander("Recent Searches", expanded=False):
+        for hist_query in st.session_state["search_history"]:
+            if st.button(hist_query, key=f"hist_{hist_query}"):
+                st.session_state["current_search"] = hist_query
+                st.session_state["search_input_widget"] = hist_query
+                add_to_search_history(hist_query)
+                st.rerun()
 
-st.sidebar.text_input("Enter name or company:", key="search_input", on_change=_commit_search)
-search_name = st.session_state["search_query"].strip().lower()
+search_name = st.session_state["current_search"].lower()
 
 max_results = st.sidebar.number_input(
     "Max results to show", min_value=25, max_value=5000, value=200, step=25
@@ -480,7 +512,7 @@ if search_name:
 else:
     matched_customers = customers.sort_values("DisplayName")
 
-# Filter: only future appointments (if bookings present)
+# Filter: only future appointments
 only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
 if only_future and not bookings.empty and "CustomerId" in bookings.columns and "StartDateTime" in bookings.columns:
     start_dt_all = pd.to_datetime(bookings["StartDateTime"], errors="coerce")
@@ -522,10 +554,11 @@ if selected_customer:
 
     # Customer migrated toggle
     if to_bool(selected_row.get("Migrated", False)):
-        st.success("Customer migrated")
+        st.success("✓ Customer migrated")
     else:
-        if st.button("Mark this customer as migrated"):
+        if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
             set_migrated(uid, "customers", customer_id, True)
+            st.cache_data.clear()
             st.rerun()
 
     # Notes
@@ -542,10 +575,11 @@ if selected_customer:
             st.code(n.get("NoteText", ""))
 
         if "Migrated" in cust_notes.columns and cust_notes["Migrated"].map(to_bool).any():
-            st.success("Notes migrated")
+            st.success("✓ Notes migrated")
         else:
-            if st.button("Mark notes as migrated"):
+            if st.button("✅ Mark notes as migrated", key="migrate_notes"):
                 set_migrated(uid, "notes", customer_id, True)
+                st.cache_data.clear()
                 st.rerun()
 
     # Bookings
@@ -559,8 +593,6 @@ if selected_customer:
         if cust_bookings.empty:
             st.info("No bookings for this customer.")
         else:
-            # We do NOT rename columns here; keep original names
-            # Ensure required columns exist
             if "StartDateTime" not in cust_bookings.columns or "EndDateTime" not in cust_bookings.columns:
                 st.error("Cannot find StartDateTime/EndDateTime columns in bookings.")
             else:
@@ -638,12 +670,12 @@ if selected_customer:
                             col2.text(str(val))
 
                     notes_txt = b.get("Notes", "")
-                    if notes_txt:
+                    if notes_txt and str(notes_txt) != "nan":
                         st.markdown("**Notes:**")
                         if is_migrated:
                             st.markdown(
-                                f"<div style='background-color:#f0f0f0;border-radius:4px;"
-                                f"padding:8px;text-decoration:line-through;'>{notes_txt}</div>",
+                                f"<div style='max-height:150px;overflow-y:auto;background-color:#f0f0f0;border-radius:4px;"
+                                f"padding:8px;border:1px solid #ddd;text-decoration:line-through;white-space:pre-wrap;'>{notes_txt}</div>",
                                 unsafe_allow_html=True
                             )
                         else:
@@ -659,13 +691,14 @@ if selected_customer:
                     booking_id = b.get("BookingId", None)
                     if booking_id is not None and booking_id != "":
                         if is_migrated:
-                            st.success("This booking is marked as migrated.")
+                            st.success("✓ This booking is marked as migrated.")
                         else:
                             if st.button(
-                                "Mark this booking as migrated",
-                                key=f"migrate-booking-{booking_id}"
+                                "✅ Mark this booking as migrated",
+                                key=f"migrate-booking-{booking_id}-{idx}"
                             ):
                                 set_migrated(uid, "bookings", booking_id, True)
+                                st.cache_data.clear()
                                 st.rerun()
                     else:
                         st.warning("⚠️ This booking row has no BookingId – cannot persist migrated state.")
