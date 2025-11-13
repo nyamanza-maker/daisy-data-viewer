@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Streamlit secrets (NEVER commit)
+.streamlit/secrets.toml
+.streamlit/secrets2.toml
+# Firebase admin key (NEVER commit)
+firebase-admin-key.json
+
+# OS
+.DS_Store
