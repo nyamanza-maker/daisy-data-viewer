@@ -88,12 +88,31 @@ def init_admin_db():
         return None
 
 
-db = init_admin_db()
-# DEBUG: Check Firestore status
-if db is None:
-    st.sidebar.warning("⚠️ Firestore is NOT connected - migration flags won't persist!")
-else:
-    st.sidebar.success("✓ Firestore connected")
+def init_admin_db():
+    """
+    Initialise Firebase Admin SDK using FIREBASE_ADMIN_JSON secret.
+    If not present, we simply don't persist migration flags.
+    """
+    if "FIREBASE_ADMIN_JSON" not in st.secrets:
+        st.error("❌ FIREBASE_ADMIN_JSON not found in secrets!")
+        return None
+
+    try:
+        admin_json = st.secrets["FIREBASE_ADMIN_JSON"]
+        if isinstance(admin_json, str):
+            cred_info = json.loads(admin_json)
+        else:
+            cred_info = dict(admin_json)
+
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(cred_info)
+            firebase_admin.initialize_app(cred)
+        return firestore.client()
+    except Exception as e:
+        st.error(f"❌ Firestore initialization failed: {type(e).__name__}: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+        return None
 
 def _mig_doc(uid: str, coll: str, doc_id: str):
     if db is None:
