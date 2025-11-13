@@ -681,18 +681,32 @@ if selected_customer:
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
                         st.markdown("**Notes**")
+                        
+                        # Escape backticks and quotes for JavaScript
+                        escaped_notes = str(notes_txt).replace('\\', '\\\\').replace('`', '\\`').replace("'", "\\'")
+                        
                         if is_migrated:
                             st.markdown(
+                                f"<div style='position: relative;'>"
+                                f"<button onclick=\"navigator.clipboard.writeText(`{escaped_notes}`)\" "
+                                f"style='position: absolute; top: 8px; right: 8px; z-index: 10; background: white; border: 1px solid #ccc; "
+                                f"border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 12px;'>📋</button>"
                                 f"<pre style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
                                 f"padding: 0.5rem; border-radius: 0.25rem; border: 1px solid rgba(49, 51, 63, 0.2); "
-                                f"text-decoration: line-through; white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>",
+                                f"text-decoration: line-through; white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>"
+                                f"</div>",
                                 unsafe_allow_html=True
                             )
                         else:
                             st.markdown(
+                                f"<div style='position: relative;'>"
+                                f"<button onclick=\"navigator.clipboard.writeText(`{escaped_notes}`)\" "
+                                f"style='position: absolute; top: 8px; right: 8px; z-index: 10; background: white; border: 1px solid #ccc; "
+                                f"border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 12px;'>📋</button>"
                                 f"<pre style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
                                 f"padding: 0.5rem; border-radius: 0.25rem; border: 1px solid rgba(49, 51, 63, 0.2); "
-                                f"white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>",
+                                f"white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>"
+                                f"</div>",
                                 unsafe_allow_html=True
                             )
 
