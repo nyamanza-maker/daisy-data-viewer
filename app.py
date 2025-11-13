@@ -10,14 +10,13 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 # ----------------------------------
-# Streamlit page config
+# Page config
 # ----------------------------------
 st.set_page_config(page_title="Daisy Data Viewer", layout="wide")
 
 # ----------------------------------
-# Firebase client (Pyrebase) setup
+# Firebase client (Pyrebase)
 # ----------------------------------
-
 firebase_section = st.secrets.get("FIREBASE", None)
 if firebase_section is None:
     st.error("FIREBASE config not found in Streamlit secrets.")
@@ -30,7 +29,7 @@ firebase_config = {
     "storageBucket": firebase_section["storage_bucket"],
     "messagingSenderId": firebase_section["messaging_sender_id"],
     "appId": firebase_section["app_id"],
-    # Not using RTDB, but some pyrebase versions require this key to exist:
+    # Not using RTDB, but some pyrebase versions require this:
     "databaseURL": firebase_section.get("database_url", "https://dummy.firebaseio.com"),
 }
 
@@ -39,13 +38,12 @@ auth = firebase.auth()
 storage = firebase.storage()
 
 # ----------------------------------
-# Firebase Admin (Firestore) setup
+# Firebase Admin (Firestore)
 # ----------------------------------
-
 def init_admin_db():
     """
     Initialise Firebase Admin SDK using FIREBASE_ADMIN_JSON secret.
-    If not available, we degrade gracefully and just don't persist migration flags.
+    If not present, we simply don't persist migration flags.
     """
     if "FIREBASE_ADMIN_JSON" not in st.secrets:
         return None
@@ -62,7 +60,7 @@ def init_admin_db():
             firebase_admin.initialize_app(cred)
         return firestore.client()
     except Exception as e:
-        st.warning(f"Could not initialise Firestore (migration flags will not persist): {e}")
+        st.warning(f"Could not initialise Firestore (migration flags won't persist): {e}")
         return None
 
 
@@ -73,7 +71,6 @@ def _mig_doc(uid: str, coll: str, doc_id: str):
     """
     Firestore path:
       /migrations/{uid}/{coll}/{doc_id}
-    Where coll is "customers", "notes", or "bookings".
     """
     if db is None:
         return None
@@ -102,9 +99,8 @@ def get_migrated(uid: str, coll: str, doc_id: str) -> bool:
 
 
 # ----------------------------------
-# Storage helpers (Firebase Storage via Pyrebase)
+# Storage helpers (Firebase Storage)
 # ----------------------------------
-
 def storage_path_for(uid: str, filename: str) -> str:
     # e.g. franchises/<uid>/Customers.csv
     return f"franchises/{uid}/{filename}"
@@ -117,7 +113,7 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
 
 def file_exists(uid: str, filename: str, id_token: str) -> bool:
     """
-    Check if a file exists by using metadata. This avoids false positives.
+    Check existence via metadata (no false positives).
     """
     try:
         storage.child(storage_path_for(uid, filename)).get_metadata(id_token)
@@ -127,23 +123,17 @@ def file_exists(uid: str, filename: str, id_token: str) -> bool:
 
 
 def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs) -> pd.DataFrame:
-    """
-    Download CSV bytes using Pyrebase and read with pandas.
-    """
     path = storage_path_for(uid, filename)
-
     try:
         file_bytes = storage.child(path).get(id_token)
     except Exception as e:
         raise RuntimeError(f"Failed to download {filename}: {e}")
-
     return pd.read_csv(io.BytesIO(file_bytes), **read_csv_kwargs)
 
 
 # ----------------------------------
-# Helpers
+# Misc helpers
 # ----------------------------------
-
 def to_bool(v):
     if pd.isna(v):
         return False
@@ -161,7 +151,7 @@ def add_migration_flags(customers: pd.DataFrame,
                         bookings: pd.DataFrame,
                         uid: str):
     """
-    Adds 'Migrated' (customers, notes) and 'migrated' (bookings) columns based on Firestore flags.
+    Adds 'Migrated' (customers, notes) and 'migrated' (bookings) columns using Firestore.
     Migration is per CustomerId.
     """
     if customers is None:
@@ -171,19 +161,16 @@ def add_migration_flags(customers: pd.DataFrame,
     if bookings is None:
         bookings = pd.DataFrame()
 
-    # Customers
     if "CustomerId" in customers.columns:
         customers["Migrated"] = customers["CustomerId"].apply(
             lambda cid: get_migrated(uid, "customers", cid)
         )
 
-    # Notes
     if "CustomerId" in notes.columns:
         notes["Migrated"] = notes["CustomerId"].apply(
             lambda cid: get_migrated(uid, "notes", cid)
         )
 
-    # Bookings
     if "CustomerId" in bookings.columns:
         bookings["migrated"] = bookings["CustomerId"].apply(
             lambda cid: get_migrated(uid, "bookings", cid)
@@ -195,7 +182,6 @@ def add_migration_flags(customers: pd.DataFrame,
 # ----------------------------------
 # Authentication UI
 # ----------------------------------
-
 if "auth" not in st.session_state:
     st.session_state["auth"] = None
 
@@ -225,46 +211,49 @@ with st.sidebar:
             st.session_state["auth"] = None
             st.rerun()
 
-# If not authenticated, stop here (only login form visible)
 if st.session_state["auth"] is None:
+    st.title("Daisy Data Viewer")
+    st.info("Please sign in to begin.")
     st.stop()
 
 uid = st.session_state["auth"]["uid"]
 id_token = st.session_state["auth"]["idToken"]
 
 # ----------------------------------
-# CSV Upload section (Firebase Storage)
+# CSV Upload section (AFTER auth!)
 # ----------------------------------
-
 with st.sidebar:
     st.header("CSV Uploads")
-
     st.caption("Upload any of your three CSV files. They will be stored securely in Firebase Storage.")
 
     cust_file = st.file_uploader("Customers.csv", type=["csv"], key="cust_up")
     notes_file = st.file_uploader("Notes.csv", type=["csv"], key="notes_up")
     book_file = st.file_uploader("Bookings.csv", type=["csv"], key="book_up")
 
-    if st.button("Upload Now"):
+    if st.button("Upload Now", key="upload_now_btn"):
         try:
             if cust_file is not None:
-                upload_bytes(uid, "Customers.csv", cust_file.read(), id_token)
+                upload_bytes(uid, "Customers.csv", cust_file.getvalue(), id_token)
             if notes_file is not None:
-                upload_bytes(uid, "Notes.csv", notes_file.read(), id_token)
+                upload_bytes(uid, "Notes.csv", notes_file.getvalue(), id_token)
             if book_file is not None:
-                upload_bytes(uid, "Bookings.csv", book_file.read(), id_token)
+                upload_bytes(uid, "Bookings.csv", book_file.getvalue(), id_token)
 
             st.success("Upload complete. Reloading…")
             st.rerun()
         except Exception as e:
             st.error(f"Upload failed: {e}")
 
+    # Tiny debug section so you can see what Storage actually has
+    st.markdown("**Storage debug:**")
+    st.write("Customers.csv:", file_exists(uid, "Customers.csv", id_token))
+    st.write("Notes.csv:", file_exists(uid, "Notes.csv", id_token))
+    st.write("Bookings.csv:", file_exists(uid, "Bookings.csv", id_token))
+
 # ----------------------------------
 # Load Data from Firebase Storage
 # ----------------------------------
-
 def load_data_for_user(uid: str, id_token: str):
-    # Which files exist?
     has_customers = file_exists(uid, "Customers.csv", id_token)
     has_notes = file_exists(uid, "Notes.csv", id_token)
     has_bookings = file_exists(uid, "Bookings.csv", id_token)
@@ -281,7 +270,6 @@ def load_data_for_user(uid: str, id_token: str):
     if not has_bookings:
         missing.append("Bookings.csv")
 
-    # Customers (required)
     if has_customers:
         customers = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
         cust_cols = [
@@ -291,13 +279,11 @@ def load_data_for_user(uid: str, id_token: str):
         ]
         customers = customers[cust_cols].copy() if cust_cols else customers.copy()
 
-    # Notes (optional)
     if has_notes:
         notes = download_csv_as_df(uid, "Notes.csv", id_token, low_memory=False)
         note_cols = [c for c in notes.columns if c in ["CustomerId", "CustomerName", "NoteText"]]
         notes = notes[note_cols].copy() if note_cols else notes.copy()
 
-    # Bookings (optional)
     if has_bookings:
         bookings = download_csv_as_df(uid, "Bookings.csv", id_token, low_memory=False)
         book_cols = [
@@ -313,7 +299,7 @@ def load_data_for_user(uid: str, id_token: str):
 
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
-# If Customers.csv isn't uploaded, we can't do anything useful yet.
+# Require at least Customers.csv
 if customers is None:
     st.title("Daisy Data Viewer")
     st.warning(
@@ -322,17 +308,15 @@ if customers is None:
     )
     st.stop()
 
-# Warn about missing optional files
-if missing_files:
-    missing_optional = [f for f in missing_files if f != "Customers.csv"]
-    if missing_optional:
-        st.info(
-            "The following optional files are not uploaded yet:\n\n"
-            + "\n".join(f"- {f}" for f in missing_optional)
-            + "\n\nCustomers will still display, but notes/bookings may be empty."
-        )
+# Notes/Bookings are optional
+optional_missing = [f for f in missing_files if f != "Customers.csv"]
+if optional_missing:
+    st.info(
+        "The following optional files are not uploaded yet:\n\n"
+        + "\n".join(f"- {f}" for f in optional_missing)
+        + "\n\nCustomers will still display, but notes/bookings may be empty."
+    )
 
-# Ensure notes/bookings are at least empty DataFrames
 if notes is None:
     notes = pd.DataFrame(columns=["CustomerId", "CustomerName", "NoteText"])
 if bookings is None:
@@ -342,13 +326,11 @@ if bookings is None:
         "RecurringAppointment", "Price"
     ])
 
-# Add migration flags
 customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid)
 
 # ----------------------------------
 # Sidebar Search
 # ----------------------------------
-
 st.sidebar.header("🔍 Search Customer")
 
 
@@ -376,7 +358,9 @@ if "FirstName" in customers.columns and "LastName" in customers.columns:
 elif "CustomerName" in customers.columns:
     customers["DisplayName"] = customers["CustomerName"]
 else:
-    customers["DisplayName"] = customers.get("CompanyName", pd.Series(["Unknown"] * len(customers))).fillna("Unknown")
+    customers["DisplayName"] = customers.get(
+        "CompanyName", pd.Series(["Unknown"] * len(customers))
+    ).fillna("Unknown")
 
 if search_name:
     mask = customers.apply(
@@ -384,9 +368,10 @@ if search_name:
     )
     matched_customers = customers[mask.any(axis=1)].sort_values("DisplayName")
 else:
-    matched_customers = customers.sort_values("DisplayName")
+    matched_customlers = customers.sort_values("DisplayName")
+    matched_customers = matched_customlers  # just to avoid typo issues :)
 
-# Filter: only future appointments (only if bookings has data)
+# Filter: only future appointments (if bookings present)
 only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
 if only_future and not bookings.empty and "CustomerId" in bookings.columns:
     start_col = next((c for c in bookings.columns if "startdatetime" in c.lower()), None)
@@ -413,23 +398,21 @@ selected_customer = st.sidebar.radio("Matches", options) if options else None
 # ----------------------------------
 # Main Display
 # ----------------------------------
-
 if selected_customer:
     selected_row = matched_customers[matched_customers["DisplayName"] == selected_customer].iloc[0]
     customer_id = selected_row["CustomerId"]
 
     st.title(f"👤 {selected_customer}")
 
-    # ---- Customer Details ----
+    # Customer details
     st.subheader("Customer Details")
-
     for col, val in selected_row.items():
         if col not in ["CustomerId", "Migrated", "DisplayName"]:
             col1, col2 = st.columns([0.3, 0.7])
             col1.markdown(f"**{col}**")
             col2.code(str(val))
 
-    # --- Customer migrated toggle --- (Firestore-backed)
+    # Customer migrated toggle
     if to_bool(selected_row.get("Migrated", False)):
         st.success("Customer migrated")
     else:
@@ -437,7 +420,7 @@ if selected_customer:
             set_migrated(uid, "customers", customer_id, True)
             st.rerun()
 
-    # ---- Notes ----
+    # Notes
     st.subheader("📝 Notes")
     if not notes.empty and "CustomerId" in notes.columns:
         cust_notes = notes[notes["CustomerId"] == customer_id]
@@ -457,7 +440,7 @@ if selected_customer:
                 set_migrated(uid, "notes", customer_id, True)
                 st.rerun()
 
-    # ---- Bookings ----
+    # Bookings
     st.subheader("📅 Bookings")
 
     if bookings.empty or "CustomerId" not in bookings.columns:
@@ -468,7 +451,7 @@ if selected_customer:
         if cust_bookings.empty:
             st.info("No bookings for this customer.")
         else:
-            # Normalize columns
+            # Normalise columns
             cust_bookings.columns = (
                 cust_bookings.columns
                 .str.strip()
@@ -553,7 +536,6 @@ if selected_customer:
                         else:
                             col2.text(str(val))
 
-                    # Booking notes
                     notes_txt = b.get("notes", "")
                     if notes_txt:
                         st.markdown("**Notes:**")
