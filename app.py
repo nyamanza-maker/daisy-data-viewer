@@ -110,14 +110,6 @@ def _mig_doc(uid: str, coll: str, doc_id: str):
 def set_migrated(uid: str, coll: str, doc_id: str, value: bool):
     if db is None:
         return
-    # DEBUG – remove once happy
-    st.write(
-        "DEBUG Firestore WRITE →",
-        "uid:", uid,
-        "collection:", coll,
-        "doc_id:", doc_id,
-        "value:", value,
-    )
     doc_ref = _mig_doc(uid, coll, doc_id)
     if doc_ref is not None:
         doc_ref.set({"migrated": bool(value)}, merge=True)
@@ -207,16 +199,11 @@ def add_migration_flags(customers: pd.DataFrame,
                         uid: str):
     """
     Adds:
-      - customers["Migrated"]
-      - notes["Migrated"]
-      - bookings["migrated"]
-
-    IMPORTANT:
-    - customers & notes migration is per CustomerId
-    - bookings migration is per BookingId  (NOT CustomerId)
+      - customers["Migrated"]  (per CustomerId)
+      - notes["Migrated"]      (per CustomerId)
+      - bookings["migrated"]   (per BookingId)
     """
 
-    # Safety initialization
     if customers is None:
         customers = pd.DataFrame()
     if notes is None:
@@ -240,7 +227,7 @@ def add_migration_flags(customers: pd.DataFrame,
     else:
         notes["Migrated"] = False
 
-    # ----- BOOKINGS -----
+    # ----- BOOKINGS (per BookingId) -----
     if "BookingId" in bookings.columns:
         bookings["migrated"] = bookings["BookingId"].apply(
             lambda bid: get_migrated(uid, "bookings", bid)
@@ -284,7 +271,6 @@ with st.sidebar:
             st.error(f"Too many failed attempts. Try again in {remaining} seconds.")
         else:
             if st.button("Login"):
-                # Check if attempts already maxed out
                 if st.session_state["login_attempts"] >= MAX_ATTEMPTS:
                     st.session_state["lockout_until"] = now + LOCKOUT_DURATION
                     st.session_state["login_attempts"] = 0
@@ -299,7 +285,6 @@ with st.sidebar:
                             st.session_state["login_attempts"] += 1
                             st.error("Please verify your email address before logging in.")
                         else:
-                            # Successful login
                             st.session_state["login_attempts"] = 0
                             st.session_state["auth"] = {
                                 "email": email,
@@ -340,7 +325,7 @@ id_token = st.session_state["auth"]["idToken"]
 
 
 # ----------------------------------
-# CSV Upload section (AFTER auth!)
+# CSV Upload section (AFTER auth)
 # ----------------------------------
 with st.sidebar:
     st.header("CSV Uploads")
@@ -364,8 +349,8 @@ with st.sidebar:
         except Exception as e:
             st.error(f"Upload failed: {e}")
 
-    # Tiny debug section so you can see what Storage actually has
-    st.markdown("**Storage debug:**")
+    # Tiny debug summary for your own sanity
+    st.markdown("**Storage status:**")
     st.write("Customers.csv:", file_exists(uid, "Customers.csv", id_token))
     st.write("Notes.csv:", file_exists(uid, "Notes.csv", id_token))
     st.write("Bookings.csv:", file_exists(uid, "Bookings.csv", id_token))
@@ -420,12 +405,6 @@ def load_data_for_user(uid: str, id_token: str):
 
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
-# 🔍 DEBUG — show actual columns in Bookings.csv
-if bookings is not None:
-    st.write("DEBUG Booking columns:", list(bookings.columns))
-else:
-    st.write("DEBUG Bookings empty or not uploaded.")
-
 # ----------------------------------
 # Require at least Customers.csv
 # ----------------------------------
@@ -450,11 +429,12 @@ if notes is None:
     notes = pd.DataFrame(columns=["CustomerId", "CustomerName", "NoteText"])
 if bookings is None:
     bookings = pd.DataFrame(columns=[
-        "CustomerId", "CustomerName", "Staff", "Service",
+        "BookingId", "CustomerId", "CustomerName", "Staff", "Service",
         "StartDateTime", "EndDateTime", "Notes",
         "RecurringAppointment", "Price"
     ])
 
+# Add Firestore-backed migration flags
 customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid)
 
 
@@ -498,20 +478,16 @@ if search_name:
     )
     matched_customers = customers[mask.any(axis=1)].sort_values("DisplayName")
 else:
-    matched_customlers = customers.sort_values("DisplayName")
-    matched_customers = matched_customlers  # just to avoid typo issues :)
-
+    matched_customers = customers.sort_values("DisplayName")
 
 # Filter: only future appointments (if bookings present)
 only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
-if only_future and not bookings.empty and "CustomerId" in bookings.columns:
-    start_col = next((c for c in bookings.columns if "startdatetime" in c.lower()), None)
-    if start_col:
-        start_dt = pd.to_datetime(bookings[start_col], errors="coerce")
-        future_ids = bookings.loc[start_dt >= datetime.now(), "CustomerId"].unique().tolist()
-        matched_customers = matched_customers[matched_customers["CustomerId"].isin(future_ids)]
-    else:
-        st.sidebar.warning("StartDateTime column missing in bookings; future filter ignored.")
+if only_future and not bookings.empty and "CustomerId" in bookings.columns and "StartDateTime" in bookings.columns:
+    start_dt_all = pd.to_datetime(bookings["StartDateTime"], errors="coerce")
+    future_ids = bookings.loc[start_dt_all >= datetime.now(), "CustomerId"].unique().tolist()
+    matched_customers = matched_customers[matched_customers["CustomerId"].isin(future_ids)]
+elif only_future:
+    st.sidebar.warning("StartDateTime column missing in bookings; future filter ignored.")
 
 # Filter: exclude migrated
 exclude_migrated = st.sidebar.checkbox("Exclude migrated customers", value=True)
@@ -583,31 +559,23 @@ if selected_customer:
         if cust_bookings.empty:
             st.info("No bookings for this customer.")
         else:
-            # Normalise columns (lowercase)
-            cust_bookings.columns = (
-                cust_bookings.columns
-                .str.strip()
-                .str.replace("\ufeff", "", regex=False)
-                .str.lower()
-            )
-
-            start_field = next((c for c in cust_bookings.columns if "startdatetime" in c), None)
-            end_field = next((c for c in cust_bookings.columns if "enddatetime" in c), None)
-
-            if not start_field or not end_field:
+            # We do NOT rename columns here; keep original names
+            # Ensure required columns exist
+            if "StartDateTime" not in cust_bookings.columns or "EndDateTime" not in cust_bookings.columns:
                 st.error("Cannot find StartDateTime/EndDateTime columns in bookings.")
             else:
-                cust_bookings[start_field] = pd.to_datetime(
-                    cust_bookings[start_field], errors="coerce"
+                # Parse dates
+                cust_bookings["StartDateTimeParsed"] = pd.to_datetime(
+                    cust_bookings["StartDateTime"], errors="coerce"
                 )
-                cust_bookings[end_field] = pd.to_datetime(
-                    cust_bookings[end_field], errors="coerce"
+                cust_bookings["EndDateTimeParsed"] = pd.to_datetime(
+                    cust_bookings["EndDateTime"], errors="coerce"
                 )
 
-                cust_bookings["start_date"] = cust_bookings[start_field].dt.strftime("%d/%m/%Y")
-                cust_bookings["start_time"] = cust_bookings[start_field].dt.strftime("%H:%M")
-                cust_bookings["end_date"] = cust_bookings[end_field].dt.strftime("%d/%m/%Y")
-                cust_bookings["end_time"] = cust_bookings[end_field].dt.strftime("%H:%M")
+                cust_bookings["StartDate"] = cust_bookings["StartDateTimeParsed"].dt.strftime("%d/%m/%Y")
+                cust_bookings["StartTime"] = cust_bookings["StartDateTimeParsed"].dt.strftime("%H:%M")
+                cust_bookings["EndDate"] = cust_bookings["EndDateTimeParsed"].dt.strftime("%d/%m/%Y")
+                cust_bookings["EndTime"] = cust_bookings["EndDateTimeParsed"].dt.strftime("%H:%M")
 
                 filter_option = st.radio(
                     "Show bookings:",
@@ -623,39 +591,39 @@ if selected_customer:
                 }
 
                 if filter_option == "Past":
-                    cust_bookings = cust_bookings[cust_bookings[start_field] < now_dt]
+                    cust_bookings = cust_bookings[cust_bookings["StartDateTimeParsed"] < now_dt]
                 elif filter_option in future_ranges:
                     end_date = future_ranges[filter_option]
                     cust_bookings = cust_bookings[
-                        (cust_bookings[start_field] >= now_dt) &
-                        (cust_bookings[start_field] <= end_date)
+                        (cust_bookings["StartDateTimeParsed"] >= now_dt) &
+                        (cust_bookings["StartDateTimeParsed"] <= end_date)
                     ]
 
                 for idx, b in cust_bookings.iterrows():
-                    is_migrated = to_bool(b.get("migrated"))
+                    is_migrated = to_bool(b.get("migrated", False))
 
-                    color = "#3cb371" if b[start_field] >= now_dt else "#888888"
+                    color = "#3cb371" if b["StartDateTimeParsed"] >= now_dt else "#888888"
                     strike = "text-decoration: line-through;" if is_migrated else ""
 
                     st.markdown(
                         f"<div style='background-color:{color}25;padding:8px;"
                         f"border-radius:6px;margin-bottom:6px;{strike}'>"
-                        f"<b>{b.get('staff', '')}</b> | {b.get('service', '')} | "
-                        f"{b['start_date']} {b['start_time']} → "
-                        f"{b['end_date']} {b['end_time']}"
+                        f"<b>{b.get('Staff', '')}</b> | {b.get('Service', '')} | "
+                        f"{b['StartDate']} {b['StartTime']} → "
+                        f"{b['EndDate']} {b['EndTime']}"
                         f"</div>",
                         unsafe_allow_html=True
                     )
 
                     fields = {
-                        "Service": b.get("service", ""),
-                        "Staff": b.get("staff", ""),
-                        "Price": b.get("price", ""),
-                        "Recurring": "Yes" if to_bool(b.get("recurringappointment")) else "No",
-                        "Start Date": b["start_date"],
-                        "Start Time": b["start_time"],
-                        "End Date": b["end_date"],
-                        "End Time": b["end_time"],
+                        "Service": b.get("Service", ""),
+                        "Staff": b.get("Staff", ""),
+                        "Price": b.get("Price", ""),
+                        "Recurring": "Yes" if to_bool(b.get("RecurringAppointment")) else "No",
+                        "Start Date": b["StartDate"],
+                        "Start Time": b["StartTime"],
+                        "End Date": b["EndDate"],
+                        "End Time": b["EndTime"],
                     }
 
                     for label, val in fields.items():
@@ -669,7 +637,7 @@ if selected_customer:
                         else:
                             col2.text(str(val))
 
-                    notes_txt = b.get("notes", "")
+                    notes_txt = b.get("Notes", "")
                     if notes_txt:
                         st.markdown("**Notes:**")
                         if is_migrated:
@@ -687,14 +655,9 @@ if selected_customer:
                                 label_visibility="collapsed",
                             )
 
-                    # ----------------------
-                    # NEW PER-BOOKING MIGRATION LOGIC
-                    # ----------------------
-                    booking_id = str(b.get("bookingid", "")).strip()
-
-                    if not booking_id:
-                        st.warning("⚠️ Warning: This booking row has no BookingId.")
-                    else:
+                    # Per-booking migration toggle (uses BookingId)
+                    booking_id = b.get("BookingId", None)
+                    if booking_id is not None and booking_id != "":
                         if is_migrated:
                             st.success("This booking is marked as migrated.")
                         else:
@@ -704,5 +667,7 @@ if selected_customer:
                             ):
                                 set_migrated(uid, "bookings", booking_id, True)
                                 st.rerun()
+                    else:
+                        st.warning("⚠️ This booking row has no BookingId – cannot persist migrated state.")
 
                     st.markdown("---")
