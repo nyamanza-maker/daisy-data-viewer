@@ -91,15 +91,17 @@ def init_admin_db():
         return None
 
     try:
-        admin_json = st.secrets["FIREBASE"]["admin_json"]
+        admin_data = st.secrets["FIREBASE"]["admin_json"]
         
-        # If it's already a dict (TOML table), use it directly
-        if isinstance(admin_json, dict):
-            cred_info = dict(admin_json)
-        elif isinstance(admin_json, str):
-            cred_info = json.loads(admin_json)
+        # Handle different formats
+        if isinstance(admin_data, str):
+            # It's a JSON string, parse it
+            cred_info = json.loads(admin_data)
+        elif isinstance(admin_data, dict):
+            # It's already a dict, use it directly
+            cred_info = dict(admin_data)
         else:
-            cred_info = admin_json
+            raise ValueError(f"Unexpected admin_json type: {type(admin_data)}")
 
         if not firebase_admin._apps:
             cred = credentials.Certificate(cred_info)
@@ -110,6 +112,8 @@ def init_admin_db():
         return db
     except Exception as e:
         st.sidebar.error(f"❌ Firestore initialization failed: {type(e).__name__}: {e}")
+        import traceback
+        st.sidebar.code(traceback.format_exc())
         return None
 
 
