@@ -15,7 +15,10 @@ import requests
 # DEBUG: Check what secrets exist
 st.sidebar.write("Available secrets:")
 st.sidebar.write(list(st.secrets.keys()))
-
+# DEBUG: Check FIREBASE section contents
+st.sidebar.write("FIREBASE section keys:")
+if "FIREBASE" in st.secrets:
+    st.sidebar.write(list(st.secrets["FIREBASE"].keys()))
 # ----------------------------------
 # Page config
 # ----------------------------------
