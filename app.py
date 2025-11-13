@@ -414,6 +414,12 @@ def load_data_for_user(uid: str, id_token: str):
 
 customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
+# 🔍 DEBUG — show actual columns in Bookings.csv
+if bookings is not None:
+    st.write("DEBUG Booking columns:", list(bookings.columns))
+else:
+    st.write("DEBUG Bookings empty or not uploaded.")
+    
 # ----------------------------------
 # Require at least Customers.csv
 # ----------------------------------
