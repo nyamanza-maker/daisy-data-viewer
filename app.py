@@ -89,7 +89,11 @@ def init_admin_db():
 
 
 db = init_admin_db()
-
+# DEBUG: Check Firestore status
+if db is None:
+    st.sidebar.warning("⚠️ Firestore is NOT connected - migration flags won't persist!")
+else:
+    st.sidebar.success("✓ Firestore connected")
 
 def _mig_doc(uid: str, coll: str, doc_id: str):
     if db is None:
