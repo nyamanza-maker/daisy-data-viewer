@@ -112,19 +112,28 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
     storage.child(path).put(io.BytesIO(content), id_token)
 
 
+#def file_exists(uid: str, filename: str, id_token: str) -> bool:
+#    path = storage_path_for(uid, filename)
+#    try:
+        # Generate a download URL
+#        url = storage.child(path).get_url(id_token)
+
+        # Do a HEAD request to check if object exists
+ #       resp = requests.head(url)
+
+#        return resp.status_code == 200
+#    except:
+#        return False
+    
 def file_exists(uid: str, filename: str, id_token: str) -> bool:
     path = storage_path_for(uid, filename)
     try:
-        # Generate a download URL
-        url = storage.child(path).get_url(id_token)
-
-        # Do a HEAD request to check if object exists
-        resp = requests.head(url)
-
-        return resp.status_code == 200
+        storage.child(path).get(id_token)
+        return True
     except:
         return False
     
+
 #def file_exists(uid: str, filename: str, id_token: str) -> bool:
     """
     Check existence via metadata (no false positives).
@@ -330,7 +339,7 @@ try:
 
 except Exception as e:
     st.error(f"URL test error: {e}")
-    
+
 
 # Require at least Customers.csv
 if customers is None:
