@@ -233,14 +233,15 @@ def add_migration_flags(customers: pd.DataFrame,
     else:
         notes["Migrated"] = False
 
+
     # ----- BOOKINGS -----
-    # FIX: use BookingId, not CustomerId
     if "BookingId" in bookings.columns:
-        bookings["migrated"] = bookings["BookingId"].apply(
-            lambda bid: get_migrated(uid, "bookings", bid)
-        )
+    bookings["migrated"] = bookings["BookingId"].apply(
+        lambda bid: get_migrated(uid, "bookings", bid)
+    )
     else:
         bookings["migrated"] = False
+
 
     return customers, notes, bookings
 
