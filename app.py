@@ -685,7 +685,7 @@ if selected_customer:
                         st.success("Migrated")
                     else:
                         if st.button("Mark as migrated", key=f"migrate-{idx}"):
-                            set_migrated(uid, "bookings", b["BookingId"], True)
+                            set_migrated(uid, "bookings", b["bookingid"], True)
                             st.rerun()
 
                     st.markdown("---")
