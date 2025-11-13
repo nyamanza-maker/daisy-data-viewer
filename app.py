@@ -680,21 +680,15 @@ if selected_customer:
 
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
-                        st.markdown("**Notes:**")
+                        col1, col2 = st.columns([0.3, 0.7])
+                        col1.markdown("**Notes**")
                         if is_migrated:
-                            st.markdown(
-                                f"<div style='max-height:150px;overflow-y:auto;background-color:#f0f0f0;border-radius:4px;"
-                                f"padding:8px;border:1px solid #ddd;text-decoration:line-through;white-space:pre-wrap;'>{notes_txt}</div>",
+                            col2.markdown(
+                                f"<code style='text-decoration: line-through; display: block; white-space: pre-wrap; max-height: 150px; overflow-y: auto;'>{notes_txt}</code>",
                                 unsafe_allow_html=True
                             )
                         else:
-                            st.text_area(
-                                "Booking Notes",
-                                value=str(notes_txt),
-                                key=f"notes-{idx}",
-                                height=100,
-                                label_visibility="collapsed",
-                            )
+                            col2.code(str(notes_txt), language=None)
 
                     # Per-booking migration toggle (uses BookingId)
                     booking_id = b.get("BookingId", None)
