@@ -99,17 +99,18 @@ db = None
 
 def init_admin_db():
     """
-    Initialise Firebase Admin SDK using FIREBASE_ADMIN_JSON secret.
+    Initialise Firebase Admin SDK using FIREBASE admin_json secret.
     If not present, we simply don't persist migration flags.
     """
     global db
     
-    if "FIREBASE_ADMIN_JSON" not in st.secrets:
-        st.sidebar.warning("⚠️ FIREBASE_ADMIN_JSON not found in secrets - migration flags won't persist!")
+    # Check if admin_json exists within FIREBASE section
+    if "FIREBASE" not in st.secrets or "admin_json" not in st.secrets["FIREBASE"]:
+        st.sidebar.warning("⚠️ FIREBASE.admin_json not found in secrets - migration flags won't persist!")
         return None
 
     try:
-        admin_json = st.secrets["FIREBASE_ADMIN_JSON"]
+        admin_json = st.secrets["FIREBASE"]["admin_json"]
         if isinstance(admin_json, str):
             cred_info = json.loads(admin_json)
         else:
@@ -120,6 +121,7 @@ def init_admin_db():
             firebase_admin.initialize_app(cred)
         
         db = firestore.client()
+        st.sidebar.success("✓ Firestore connected")
         return db
     except Exception as e:
         st.sidebar.error(f"❌ Firestore initialization failed: {type(e).__name__}: {e}")
