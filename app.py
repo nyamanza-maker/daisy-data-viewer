@@ -110,12 +110,14 @@ def _mig_doc(uid: str, coll: str, doc_id: str):
 def set_migrated(uid: str, coll: str, doc_id: str, value: bool):
     if db is None:
         return
-    # DEBUG
-    st.write("DEBUG Firestore WRITE →",
-             "uid:", uid,
-             "collection:", coll,
-             "doc_id:", doc_id,
-             "value:", value)
+    # DEBUG – remove once happy
+    st.write(
+        "DEBUG Firestore WRITE →",
+        "uid:", uid,
+        "collection:", coll,
+        "doc_id:", doc_id,
+        "value:", value,
+    )
     doc_ref = _mig_doc(uid, coll, doc_id)
     if doc_ref is not None:
         doc_ref.set({"migrated": bool(value)}, merge=True)
@@ -152,9 +154,10 @@ def file_exists(uid: str, filename: str, id_token: str) -> bool:
     Check existence using Firebase Storage REST API with a Bearer token.
     """
     path = f"franchises/{uid}/{filename}"
-
-    url = f"https://firebasestorage.googleapis.com/v0/b/{firebase_config['storageBucket']}/o/{path.replace('/', '%2F')}"
-
+    url = (
+        f"https://firebasestorage.googleapis.com/v0/b/"
+        f"{firebase_config['storageBucket']}/o/{path.replace('/', '%2F')}"
+    )
     headers = {"Authorization": f"Bearer {id_token}"}
 
     try:
@@ -169,12 +172,10 @@ def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs
     Download CSV via Firebase Storage REST API with auth.
     """
     path = f"franchises/{uid}/{filename}"
-
     url = (
         f"https://firebasestorage.googleapis.com/v0/b/"
         f"{firebase_config['storageBucket']}/o/{path.replace('/', '%2F')}?alt=media"
     )
-
     headers = {"Authorization": f"Bearer {id_token}"}
 
     r = requests.get(url, headers=headers)
@@ -239,7 +240,6 @@ def add_migration_flags(customers: pd.DataFrame,
     else:
         notes["Migrated"] = False
 
-
     # ----- BOOKINGS -----
     if "BookingId" in bookings.columns:
         bookings["migrated"] = bookings["BookingId"].apply(
@@ -247,7 +247,6 @@ def add_migration_flags(customers: pd.DataFrame,
         )
     else:
         bookings["migrated"] = False
-
 
     return customers, notes, bookings
 
@@ -426,7 +425,7 @@ if bookings is not None:
     st.write("DEBUG Booking columns:", list(bookings.columns))
 else:
     st.write("DEBUG Bookings empty or not uploaded.")
-    
+
 # ----------------------------------
 # Require at least Customers.csv
 # ----------------------------------
@@ -584,7 +583,7 @@ if selected_customer:
         if cust_bookings.empty:
             st.info("No bookings for this customer.")
         else:
-            # Normalise columns
+            # Normalise columns (lowercase)
             cust_bookings.columns = (
                 cust_bookings.columns
                 .str.strip()
@@ -633,8 +632,8 @@ if selected_customer:
                     ]
 
                 for idx, b in cust_bookings.iterrows():
-                    st.write("DEBUG LOOP:", list(b.index))
                     is_migrated = to_bool(b.get("migrated"))
+
                     color = "#3cb371" if b[start_field] >= now_dt else "#888888"
                     strike = "text-decoration: line-through;" if is_migrated else ""
 
@@ -688,11 +687,22 @@ if selected_customer:
                                 label_visibility="collapsed",
                             )
 
-                    if is_migrated:
-                        st.success("Migrated")
+                    # ----------------------
+                    # NEW PER-BOOKING MIGRATION LOGIC
+                    # ----------------------
+                    booking_id = str(b.get("bookingid", "")).strip()
+
+                    if not booking_id:
+                        st.warning("⚠️ Warning: This booking row has no BookingId.")
                     else:
-                        if st.button("Mark as migrated", key=f"migrate-{idx}"):
-                            set_migrated(uid, "bookings", b["bookingid"], True)
-                            st.rerun()
+                        if is_migrated:
+                            st.success("This booking is marked as migrated.")
+                        else:
+                            if st.button(
+                                "Mark this booking as migrated",
+                                key=f"migrate-booking-{booking_id}"
+                            ):
+                                set_migrated(uid, "bookings", booking_id, True)
+                                st.rerun()
 
                     st.markdown("---")
