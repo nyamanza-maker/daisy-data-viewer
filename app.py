@@ -126,12 +126,18 @@ def upload_bytes(uid: str, filename: str, content: bytes, id_token: str):
 #        return False
     
 def file_exists(uid: str, filename: str, id_token: str) -> bool:
-    path = storage_path_for(uid, filename)
+    path = f"franchises/{uid}/{filename}"
+
+    url = f"https://firebasestorage.googleapis.com/v0/b/{firebase_config['storageBucket']}/o/{path.replace('/', '%2F')}"
+
+    headers = {"Authorization": f"Bearer {id_token}"}
+
     try:
-        storage.child(path).get(id_token)
-        return True
+        r = requests.get(url, headers=headers)
+        return r.status_code == 200
     except:
         return False
+
     
 
 #def file_exists(uid: str, filename: str, id_token: str) -> bool:
@@ -145,7 +151,7 @@ def file_exists(uid: str, filename: str, id_token: str) -> bool:
         return False
 
 
-def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs) -> pd.DataFrame:
+#def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs) -> pd.DataFrame:
     path = storage_path_for(uid, filename)
     try:
         file_bytes = storage.child(path).get(id_token)
@@ -153,7 +159,22 @@ def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs
         raise RuntimeError(f"Failed to download {filename}: {e}")
     return pd.read_csv(io.BytesIO(file_bytes), **read_csv_kwargs)
 
+def download_csv_as_df(uid: str, filename: str, id_token: str, **read_csv_kwargs):
+    path = f"franchises/{uid}/{filename}"
 
+    url = (
+        f"https://firebasestorage.googleapis.com/v0/b/"
+        f"{firebase_config['storageBucket']}/o/{path.replace('/', '%2F')}?alt=media"
+    )
+
+    headers = {"Authorization": f"Bearer {id_token}"}
+
+    r = requests.get(url, headers=headers)
+
+    if r.status_code != 200:
+        raise RuntimeError(f"Failed to download {filename}: {r.text}")
+
+    return pd.read_csv(io.BytesIO(r.content), **read_csv_kwargs)
 # ----------------------------------
 # Misc helpers
 # ----------------------------------
