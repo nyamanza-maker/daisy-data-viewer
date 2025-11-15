@@ -804,17 +804,31 @@ else:
 
                     # Reduce spacing between booking fields
                     st.markdown("""
-
                         <style>
                         div[data-testid="stVerticalBlock"] > div:has(div.stCodeBlock) {
                             margin-bottom: -1rem;
                         }
-                        </style>
+                         </style>
                     """, unsafe_allow_html=True)
 
                     for label, val in fields.items():
                         col1, col2 = st.columns([0.3, 0.7])
                         col1.markdown(f"**{label}**")
+
+                        # Normalise empty values
+                        if val is None or str(val).strip() == "" or str(val).lower() in ["nan", "none"]:
+                            val = "*no data*"
+
+                            # SPECIAL CASE: Booking Notes → ALWAYS show in Streamlit's native copyable code-box
+                        if label == "Booking Notes":
+                            if is_migrated:
+                             # Strike-through but keep the Streamlit code block for copying
+                                col2.code(f"~~{val}~~", language=None)
+                            else:
+                                col2.code(str(val), language=None)
+                            continue
+
+                            # All other fields:
                         if is_migrated:
                             col2.markdown(
                                 f"<code style='text-decoration: line-through;'>{val}</code>",
@@ -822,7 +836,9 @@ else:
                             )
                         else:
                             col2.code(str(val), language=None)
-
+                    ##here##
+                    
+                    #here
                     notes_txt = b.get("Notes", "")
                     if notes_txt and str(notes_txt) != "nan":
                         st.markdown("**Notes**")
