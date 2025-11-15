@@ -2,7 +2,6 @@ import io
 import json
 from datetime import datetime, timedelta
 from time import time
-import re
 
 import pandas as pd
 import streamlit as st
@@ -13,13 +12,20 @@ from firebase_admin import credentials, firestore
 
 import requests
 
+# DEBUG: Check what secrets exist
+#st.sidebar.write("Available secrets:")
+#st.sidebar.write(list(st.secrets.keys()))
+# DEBUG: Check FIREBASE section contents
+#st.sidebar.write("FIREBASE section keys:")
+#if "FIREBASE" in st.secrets:
+#    st.sidebar.write(list(st.secrets["FIREBASE"].keys()))
 # ----------------------------------
 # Page config
 # ----------------------------------
-st.set_page_config(page_title="Daisy Data Viewer v2", layout="wide")
+st.set_page_config(page_title="Daisy Data Viewer", layout="wide")
 
 # ----------------------------------
-# Firebase client (Pyrebase) - from working backup
+# Firebase client (Pyrebase)
 # ----------------------------------
 firebase_section = st.secrets.get("FIREBASE", None)
 if firebase_section is None:
@@ -42,7 +48,7 @@ storage = firebase.storage()
 
 
 # ----------------------------------
-# Friendly Firebase login error parser (from working backup)
+# Friendly Firebase login error parser
 # ----------------------------------
 def parse_firebase_login_error(e: Exception) -> str:
     raw = str(e)
@@ -65,11 +71,12 @@ def parse_firebase_login_error(e: Exception) -> str:
     return "Authentication failed. Please check your email and password."
 
 
-# ----------------------------------
-# Firebase Admin (Firestore) - migration flags storage
-# ----------------------------------
-db = None
 
+# ----------------------------------
+# Firebase Admin (Firestore)
+# ----------------------------------
+# Initialize db as None at module level
+db = None
 
 def init_admin_db():
     """
@@ -77,36 +84,72 @@ def init_admin_db():
     If not present, we simply don't persist migration flags.
     """
     global db
-
+    
+    # Check if admin_json exists within FIREBASE section
     if "FIREBASE" not in st.secrets or "admin_json" not in st.secrets["FIREBASE"]:
-        st.sidebar.warning("⚠️ FIREBASE.admin_json not found in secrets - migration flags will not persist.")
+        st.sidebar.warning("⚠️ FIREBASE.admin_json not found in secrets - migration flags won't persist!")
         return None
 
     try:
         admin_data = st.secrets["FIREBASE"]["admin_json"]
-
+        
+        # Convert AttrDict or dict to regular dict, or parse JSON string
         if isinstance(admin_data, str):
             cred_info = json.loads(admin_data)
         else:
+            # Handle dict, AttrDict, or any dict-like object
             cred_info = dict(admin_data)
 
         if not firebase_admin._apps:
             cred = credentials.Certificate(cred_info)
             firebase_admin.initialize_app(cred)
-
+        
         db = firestore.client()
         st.sidebar.success("✓ Firestore connected")
         return db
     except Exception as e:
         st.sidebar.error(f"❌ Firestore initialization failed: {type(e).__name__}: {e}")
         import traceback
-
         st.sidebar.code(traceback.format_exc())
         return None
 
 
-db = init_admin_db()
+def _mig_doc(uid: str, coll: str, doc_id: str):
+    """
+    Firestore path:
+      /migrations/{uid}/{coll}/{doc_id}
+    """
+    global db
+    if db is None:
+        return None
+    return db.collection("migrations").document(uid).collection(coll).document(str(doc_id))
 
+
+def set_migrated(uid: str, coll: str, doc_id: str, value: bool):
+    global db
+    if db is None:
+        return
+    doc_ref = _mig_doc(uid, coll, doc_id)
+    if doc_ref is not None:
+        doc_ref.set({"migrated": bool(value)}, merge=True)
+
+
+def get_migrated(uid: str, coll: str, doc_id: str) -> bool:
+    global db
+    if db is None:
+        return False
+    doc_ref = _mig_doc(uid, coll, doc_id)
+    if doc_ref is None:
+        return False
+    doc = doc_ref.get()
+    if doc.exists:
+        data = doc.to_dict()
+        return bool(data.get("migrated", False))
+    return False
+
+
+# Initialize the database
+db = init_admin_db()
 
 def _mig_doc(uid: str, coll: str, doc_id: str):
     if db is None:
@@ -136,7 +179,7 @@ def get_migrated(uid: str, coll: str, doc_id: str) -> bool:
 
 
 # ----------------------------------
-# Storage helpers (Firebase Storage) - from working backup
+# Storage helpers (Firebase Storage)
 # ----------------------------------
 def storage_path_for(uid: str, filename: str) -> str:
     return f"franchises/{uid}/{filename}"
@@ -209,59 +252,65 @@ def add_migration_flags(customers: pd.DataFrame,
         bookings = pd.DataFrame()
 
     if db is None:
+        # No Firestore, mark everything as not migrated
         customers["Migrated"] = False
         notes["Migrated"] = False
         bookings["migrated"] = False
         return customers, notes, bookings
 
     try:
+        # Batch read all migrations for this user
         migrations_ref = db.collection("migrations").document(uid)
-
+        
+        # Get all customer migrations
         customer_migrations = {}
         if "CustomerId" in customers.columns:
             cust_docs = migrations_ref.collection("customers").stream()
             for doc in cust_docs:
                 customer_migrations[doc.id] = doc.to_dict().get("migrated", False)
-
+        
+        # Get all note migrations
         note_migrations = {}
         if "CustomerId" in notes.columns:
             note_docs = migrations_ref.collection("notes").stream()
             for doc in note_docs:
                 note_migrations[doc.id] = doc.to_dict().get("migrated", False)
-
+        
+        # Get all booking migrations
         booking_migrations = {}
         if "BookingId" in bookings.columns:
             booking_docs = migrations_ref.collection("bookings").stream()
             for doc in booking_docs:
                 booking_migrations[doc.id] = doc.to_dict().get("migrated", False)
-
+        
+        # Apply to dataframes
         if "CustomerId" in customers.columns:
             customers["Migrated"] = customers["CustomerId"].apply(
                 lambda cid: customer_migrations.get(str(cid), False)
             )
         else:
             customers["Migrated"] = False
-
+        
         if "CustomerId" in notes.columns:
             notes["Migrated"] = notes["CustomerId"].apply(
                 lambda cid: note_migrations.get(str(cid), False)
             )
         else:
             notes["Migrated"] = False
-
+        
         if "BookingId" in bookings.columns:
             bookings["migrated"] = bookings["BookingId"].apply(
                 lambda bid: booking_migrations.get(str(bid), False)
             )
         else:
             bookings["migrated"] = False
-
+        
     except Exception as e:
         st.warning(f"Could not load migration flags: {e}")
         customers["Migrated"] = False
         notes["Migrated"] = False
         bookings["migrated"] = False
-
+    
     return customers, notes, bookings
 
 
@@ -269,9 +318,10 @@ def add_migration_flags(customers: pd.DataFrame,
 # Search history management
 # ----------------------------------
 def add_to_search_history(query: str):
+    """Add query to search history, keep last 10."""
     if "search_history" not in st.session_state:
         st.session_state["search_history"] = []
-
+    
     query = query.strip()
     if query and query not in st.session_state["search_history"]:
         st.session_state["search_history"].insert(0, query)
@@ -355,7 +405,7 @@ with st.sidebar:
             st.rerun()
 
 if st.session_state["auth"] is None:
-    st.title("Daisy Data Viewer v2")
+    st.title("Daisy Data Viewer")
     st.info("Please sign in to begin.")
     st.stop()
 
@@ -364,15 +414,17 @@ id_token = st.session_state["auth"]["idToken"]
 
 
 # ----------------------------------
-# CSV Upload section (AFTER auth) - same behaviour as working app
+# CSV Upload section (AFTER auth)
 # ----------------------------------
 with st.sidebar:
+    # Check if files exist
     has_customers = file_exists(uid, "Customers.csv", id_token)
     has_notes = file_exists(uid, "Notes.csv", id_token)
     has_bookings = file_exists(uid, "Bookings.csv", id_token)
-
+    
     all_uploaded = has_customers and has_notes and has_bookings
-
+    
+    # Collapsible upload section if all files uploaded
     if all_uploaded:
         with st.expander("CSV Uploads (All files uploaded ✓)", expanded=False):
             st.caption("Upload any of your three CSV files. They will be stored securely in Firebase Storage.")
@@ -422,7 +474,7 @@ with st.sidebar:
 
 
 # ----------------------------------
-# Data loading and cleansing helpers
+# Load Data from Firebase Storage
 # ----------------------------------
 @st.cache_data(ttl=300)
 def load_data_for_user(uid: str, id_token: str):
@@ -444,203 +496,43 @@ def load_data_for_user(uid: str, id_token: str):
 
     if has_customers:
         customers = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
+        cust_cols = [
+            c for c in customers.columns if c in
+            ["CustomerId", "FirstName", "LastName", "CompanyName",
+             "Telephone", "SMS", "PhysicalAddress", "Gender", "CustomerName"]
+        ]
+        customers = customers[cust_cols].copy() if cust_cols else customers.copy()
 
     if has_notes:
         notes = download_csv_as_df(uid, "Notes.csv", id_token, low_memory=False)
+        note_cols = [c for c in notes.columns if c in ["CustomerId", "CustomerName", "NoteText"]]
+        notes = notes[note_cols].copy() if note_cols else notes.copy()
 
     if has_bookings:
         bookings = download_csv_as_df(uid, "Bookings.csv", id_token, low_memory=False)
+        book_cols = [
+            c for c in bookings.columns if c in
+            ["BookingId", "CustomerId", "CustomerName", "Staff", "Service",
+             "StartDateTime", "EndDateTime", "Notes",
+             "RecurringAppointment", "Price"]
+        ]
+        bookings = bookings[book_cols].copy() if book_cols else bookings.copy()
 
     return customers, notes, bookings, missing
 
 
-def clean_customer_name(raw_name: str):
-    """
-    Basic deterministic cleanup:
-    - Strip tokens like ACC, Albany, TM, etc.
-    - Title case.
-    - Split into first + remaining.
-    """
-    if not isinstance(raw_name, str):
-        return "", "", ""
+customers, notes, bookings, missing_files = load_data_for_user(uid, id_token)
 
-    name = raw_name.strip()
-
-    strip_tokens = ["ACC", "ALBANY", "TM", "CHILDREN", "CLIENT", "NB"]
-    for token in strip_tokens:
-        name = re.sub(r"\b" + re.escape(token) + r"\b", " ", name, flags=re.IGNORECASE)
-
-    name = re.sub(r"[-–,*/]+", " ", name)
-    name = re.sub(r"\s+", " ", name).strip()
-
-    if not name:
-        return "", "", ""
-
-    name_tc = name.title()
-    parts = name_tc.split()
-    if len(parts) == 1:
-        return parts[0], "", name_tc
-    first = parts[0]
-    second = " ".join(parts[1:])
-    return first, second, name_tc
-
-
-def parse_booking_note_for_addresses(note: str):
-    """
-    Simple regex-based parsing to extract FROM and GOING TO addresses
-    from the booking Notes field.
-    """
-    if not isinstance(note, str) or not note.strip():
-        return "", "", note or ""
-
-    text = note.replace("\n", " ").replace("\r", " ")
-    from_addr = ""
-    to_addr = ""
-    remaining = text
-
-    from_match = re.search(r"FROM\s*:?\s*(.*?)(GOING TO|TO:)", text, re.IGNORECASE)
-    if from_match:
-        from_addr = from_match.group(1).strip()
-        remaining = text[from_match.end():].strip()
-    to_match = re.search(r"(GOING TO|TO:)\s*(.*?)(\*\*|INVOICE|$)", text, re.IGNORECASE)
-    if to_match:
-        to_addr = to_match.group(2).strip()
-
-    if not from_addr and not to_addr:
-        return "", "", text.strip()
-
-    cleaned = text
-    if from_addr:
-        cleaned = re.sub(r"FROM\s*:?\s*" + re.escape(from_addr), "", cleaned, flags=re.IGNORECASE)
-    if to_addr:
-        cleaned = re.sub(r"(GOING TO|TO:)\s*" + re.escape(to_addr), "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-    return from_addr, to_addr, cleaned
-
-
-def enrich_customers(customers: pd.DataFrame) -> pd.DataFrame:
-    if customers is None or customers.empty:
-        return pd.DataFrame()
-
-    df = customers.copy()
-
-    if "CustomerName" not in df.columns and "CompanyName" in df.columns:
-        df["CustomerName"] = df["CompanyName"]
-
-    if "CustomerName" not in df.columns:
-        df["CustomerName"] = ""
-
-    clean_first = []
-    clean_second = []
-    clean_full = []
-    for raw_name in df["CustomerName"].astype(str):
-        f, s, full = clean_customer_name(raw_name)
-        clean_first.append(f)
-        clean_second.append(s)
-        clean_full.append(full)
-
-    df["CleanFirstName"] = clean_first
-    df["CleanSecondName"] = clean_second
-    df["CleanFullName"] = clean_full
-
-    phone = None
-    if "Telephone" in df.columns:
-        phone = df["Telephone"]
-    elif "SmsNumber" in df.columns:
-        phone = df["SmsNumber"]
-    else:
-        phone = pd.Series([""] * len(df))
-    df["CleanMobile"] = phone.fillna("").astype(str)
-
-    if "Gender" in df.columns:
-        df["CleanGender"] = df["Gender"].astype(str)
-    elif "GenderDescription" in df.columns:
-        df["CleanGender"] = df["GenderDescription"].astype(str)
-    else:
-        df["CleanGender"] = ""
-
-    if "DateOfBirth" in df.columns:
-        df["CleanDob"] = df["DateOfBirth"].astype(str)
-    else:
-        df["CleanDob"] = ""
-
-    if "PhysicalAddress" in df.columns:
-        df["CleanAddress"] = df["PhysicalAddress"].astype(str)
-    else:
-        df["CleanAddress"] = ""
-
-    df["AddressIsGuessed"] = False
-
-    df["DisplayName"] = df["CleanFullName"].where(df["CleanFullName"].str.len() > 0, df["CustomerName"])
-
-    return df
-
-
-def enrich_bookings(bookings: pd.DataFrame) -> pd.DataFrame:
-    if bookings is None or bookings.empty:
-        return pd.DataFrame()
-
-    df = bookings.copy()
-
-    if "Notes" not in df.columns:
-        df["Notes"] = ""
-
-    from_list = []
-    to_list = []
-    extra_list = []
-    return_flags = []
-
-    for note in df["Notes"].astype(str):
-        f, t, extra = parse_booking_note_for_addresses(note)
-        from_list.append(f)
-        to_list.append(t)
-        extra_list.append(extra)
-        return_flags.append("RETURN" in note.upper())
-
-    df["BookingFrom"] = from_list
-    df["BookingTo"] = to_list
-    df["BookingExtraNotes"] = extra_list
-    df["ReturnBooking"] = return_flags
-
-    df["StartDateTimeParsed"] = pd.to_datetime(df.get("StartDateTime", pd.Series([None] * len(df))), errors="coerce")
-    df["EndDateTimeParsed"] = pd.to_datetime(df.get("EndDateTime", pd.Series([None] * len(df))), errors="coerce")
-
-    df["BookingFromIsGuessed"] = False
-    df["BookingToIsGuessed"] = False
-
-    if "RecurringAppointment" in df.columns:
-        df["RecurringBool"] = df["RecurringAppointment"].apply(to_bool)
-    else:
-        df["RecurringBool"] = False
-
-    return df
-
-
-customers_raw, notes_raw, bookings_raw, missing_files = load_data_for_user(uid, id_token)
-
-if customers_raw is None or customers_raw.empty:
-    st.title("Daisy Data Viewer v2")
+# ----------------------------------
+# Require at least Customers.csv
+# ----------------------------------
+if customers is None:
+    st.title("Daisy Data Viewer")
     st.warning(
-        "You need to upload at least Customers.csv to begin. Use the CSV Uploads section in the sidebar."
+        "You need to upload at least **Customers.csv** to begin.\n\n"
+        "Use the *CSV Uploads* section in the sidebar."
     )
     st.stop()
-
-if notes_raw is None:
-    notes_raw = pd.DataFrame(columns=["CustomerId", "CustomerName", "NoteText"])
-if bookings_raw is None:
-    bookings_raw = pd.DataFrame(columns=[
-        "BookingId", "CustomerId", "CustomerName", "Staff", "Service",
-        "StartDateTime", "EndDateTime", "Notes",
-        "RecurringAppointment", "Price"
-    ])
-
-customers_enriched = enrich_customers(customers_raw)
-bookings_enriched = enrich_bookings(bookings_raw)
-
-customers_enriched, notes_raw, bookings_enriched = add_migration_flags(
-    customers_enriched, notes_raw, bookings_enriched, uid
-)
 
 optional_missing = [f for f in missing_files if f != "Customers.csv"]
 if optional_missing:
@@ -650,31 +542,30 @@ if optional_missing:
         + "\n\nCustomers will still display, but notes/bookings may be empty."
     )
 
+if notes is None:
+    notes = pd.DataFrame(columns=["CustomerId", "CustomerName", "NoteText"])
+if bookings is None:
+    bookings = pd.DataFrame(columns=[
+        "BookingId", "CustomerId", "CustomerName", "Staff", "Service",
+        "StartDateTime", "EndDateTime", "Notes",
+        "RecurringAppointment", "Price"
+    ])
 
-# ----------------------------------
-# Styling helpers
-# ----------------------------------
-def strike_if_migrated(text: str, migrated: bool) -> str:
-    if not text:
-        return ""
-    return f"~~{text}~~" if migrated else text
-
-
-def style_address_html(address_text: str, is_guess: bool) -> str:
-    if not address_text:
-        return ""
-    color = "orange" if is_guess else "inherit"
-    return f"<span style='color:{color}'>{address_text}</span>"
+# Add Firestore-backed migration flags
+customers, notes, bookings = add_migration_flags(customers, notes, bookings, uid)
 
 
 # ----------------------------------
-# Sidebar: search & filters
+# Sidebar Search with History
 # ----------------------------------
+
 st.sidebar.header("🔍 Search Customer")
 
+# Initialize search state
 if "current_search" not in st.session_state:
     st.session_state["current_search"] = ""
 
+# Search input with on_change callback (fires on blur / Enter)
 def update_search():
     new_query = st.session_state.get("search_input_widget", "").strip()
     if new_query != st.session_state["current_search"]:
@@ -683,12 +574,76 @@ def update_search():
             add_to_search_history(new_query)
 
 search_text = st.sidebar.text_input(
-    "Enter customer name:",
+    "Enter name or company:",
     value=st.session_state["current_search"],
     key="search_input_widget",
-    on_change=update_search
+    on_change=update_search,
 )
 
+search_name = st.session_state["current_search"].lower()
+
+max_results = st.sidebar.number_input(
+    "Max results to show", min_value=25, max_value=5000, value=200, step=25
+)
+
+# DisplayName logic
+if "FirstName" in customers.columns and "LastName" in customers.columns:
+    customers["DisplayName"] = (
+        customers["FirstName"].fillna("") + " " + customers["LastName"].fillna("")
+    ).str.strip()
+elif "CustomerName" in customers.columns:
+    customers["DisplayName"] = customers["CustomerName"]
+else:
+    customers["DisplayName"] = customers.get(
+        "CompanyName", pd.Series(["Unknown"] * len(customers))
+    ).fillna("Unknown")
+
+# Faster search: look only in key text columns
+if search_name:
+    searchable_cols = [
+        "DisplayName",
+        "CompanyName",
+        "Telephone",
+        "SMS",
+        "PhysicalAddress",
+        "CustomerName",
+        "FirstName",
+        "LastName",
+    ]
+    searchable_cols = [c for c in searchable_cols if c in customers.columns]
+    if searchable_cols:
+        mask = pd.Series(False, index=customers.index)
+        for col in searchable_cols:
+            mask |= customers[col].astype(str).str.lower().str.contains(search_name, na=False)
+        matched_customers = customers[mask].sort_values("DisplayName")
+    else:
+        matched_customers = customers.sort_values("DisplayName")
+else:
+    matched_customers = customers.sort_values("DisplayName")
+
+# Filter: only future appointments
+only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
+if only_future and not bookings.empty and "CustomerId" in bookings.columns and "StartDateTime" in bookings.columns:
+    start_dt_all = pd.to_datetime(bookings["StartDateTime"], errors="coerce")
+    future_ids = bookings.loc[start_dt_all >= datetime.now(), "CustomerId"].unique().tolist()
+    matched_customers = matched_customers[matched_customers["CustomerId"].isin(future_ids)]
+elif only_future:
+    st.sidebar.warning("StartDateTime column missing in bookings; future filter ignored.")
+
+# Filter: exclude migrated
+exclude_migrated = st.sidebar.checkbox("Exclude migrated customers", value=True)
+if exclude_migrated and "Migrated" in matched_customers.columns:
+    matched_customers = matched_customers[~matched_customers["Migrated"].map(to_bool)]
+
+if not st.sidebar.checkbox("Show all matches", value=False):
+    matched_customers = matched_customers.head(max_results)
+
+st.sidebar.write(f"🧾 {len(matched_customers)} shown ({customers.shape[0]} total)")
+
+options = matched_customers["DisplayName"].tolist()
+selected_customer = st.sidebar.radio("Matches", options) if options else None
+
+# Show search history *below* matches
 if st.session_state["search_history"]:
     with st.sidebar.expander("Recent Searches", expanded=False):
         for hist_query in st.session_state["search_history"]:
@@ -698,252 +653,221 @@ if st.session_state["search_history"]:
                 add_to_search_history(hist_query)
                 st.rerun()
 
-search_name = st.session_state["current_search"].lower()
-
-max_results = st.sidebar.number_input(
-    "Max results to show", min_value=25, max_value=5000, value=200, step=25
-)
-
-only_future = st.sidebar.checkbox("Only customers with future appointments", value=False)
-exclude_migrated = st.sidebar.checkbox("Exclude migrated customers", value=True)
-
-# Global view mode
-st.sidebar.subheader("View mode")
-view_mode = st.sidebar.radio("Show data as", ["Original", "Cleansed"])
-show_clean = view_mode == "Cleansed"
-
-customers_df = customers_enriched.copy()
-
-if search_name:
-    mask = customers_df.apply(
-        lambda x: x.astype(str).str.lower().str.contains(search_name, na=False)
-    )
-    matched_customers = customers_df[mask.any(axis=1)].sort_values("DisplayName")
-else:
-    matched_customers = customers_df.sort_values("DisplayName")
-
-if only_future and not bookings_enriched.empty and "CustomerId" in bookings_enriched.columns:
-    now_dt = datetime.now()
-    future_ids = bookings_enriched.loc[
-        bookings_enriched["StartDateTimeParsed"] >= now_dt, "CustomerId"
-    ].dropna().unique().tolist()
-    matched_customers = matched_customers[matched_customers["CustomerId"].isin(future_ids)]
-elif only_future:
-    st.sidebar.warning("StartDateTime column missing in bookings; future filter ignored.")
-
-if exclude_migrated and "Migrated" in matched_customers.columns:
-    matched_customers = matched_customers[~matched_customers["Migrated"].map(to_bool)]
-
-if not st.sidebar.checkbox("Show all matches", value=False):
-    matched_customers = matched_customers.head(max_results)
-
-st.sidebar.write(f"🧾 {len(matched_customers)} shown ({customers_df.shape[0]} total)")
-
-options = matched_customers["CustomerId"].tolist()
-selected_customer_id = None
-if options:
-    id_to_label = {
-        row["CustomerId"]: row["DisplayName"]
-        for _, row in matched_customers.iterrows()
-    }
-    selected_customer_id = st.sidebar.selectbox(
-        "Matches",
-        options=options,
-        format_func=lambda cid: id_to_label.get(cid, str(cid)),
-    )
-
-
 # ----------------------------------
-# Main display: Customer, Notes, Bookings
+# Main Display
 # ----------------------------------
-st.title("🚗 Driving Miss Daisy – Data Viewer v2")
+if selected_customer:
+    selected_row = matched_customers[matched_customers["DisplayName"] == selected_customer].iloc[0]
+    customer_id = selected_row["CustomerId"]
 
-if selected_customer_id is None:
-    st.info("Use the search on the left to select a customer.")
-    st.stop()
+    st.title(f"👤 {selected_customer}")
 
-cust_row = matched_customers[matched_customers["CustomerId"] == selected_customer_id].iloc[0]
-customer_id = cust_row["CustomerId"]
-customer_migrated = to_bool(cust_row.get("Migrated", False))
+    # Customer details
+    st.subheader("Customer Details")
+    for col, val in selected_row.items():
+        if col not in ["CustomerId", "Migrated", "DisplayName"]:
+            col1, col2 = st.columns([0.3, 0.7])
 
-st.header(f"Customer – {cust_row['DisplayName']}")
-
-col_top_left, col_top_right = st.columns([3, 1])
-with col_top_left:
-    st.markdown("### Customer")
-with col_top_right:
-    mig_toggle = st.checkbox("Mark customer as migrated", value=customer_migrated)
-    if mig_toggle != customer_migrated:
-        set_migrated(uid, "customers", customer_id, mig_toggle)
-        st.cache_data.clear()
-        st.rerun()
-
-if show_clean:
-    first_name = cust_row.get("CleanFirstName", "")
-    second_name = cust_row.get("CleanSecondName", "")
-    mobile = cust_row.get("CleanMobile", "")
-    gender = cust_row.get("CleanGender", "")
-    dob = cust_row.get("CleanDob", "")
-    address = cust_row.get("CleanAddress", "")
-    addr_guess = bool(cust_row.get("AddressIsGuessed", False))
-else:
-    raw_name = str(cust_row.get("CustomerName", ""))
-    parts = raw_name.split()
-    first_name = parts[0] if parts else ""
-    second_name = " ".join(parts[1:]) if len(parts) > 1 else ""
-    mobile = str(cust_row.get("Telephone") or cust_row.get("SmsNumber") or "")
-    gender = str(cust_row.get("Gender") or cust_row.get("GenderDescription") or "")
-    dob = str(cust_row.get("DateOfBirth") or "")
-    address = str(cust_row.get("PhysicalAddress") or "")
-    addr_guess = False
-
-addr_html = style_address_html(address, addr_guess)
-addr_html = strike_if_migrated(addr_html, mig_toggle)
-
-st.markdown("**Customer First Name:** " + strike_if_migrated(first_name, mig_toggle))
-st.markdown("**Customer Second Name:** " + strike_if_migrated(second_name, mig_toggle))
-st.markdown("**Customer Mobile Number:** " + strike_if_migrated(mobile, mig_toggle))
-st.markdown("**Customer Gender:** " + strike_if_migrated(gender, mig_toggle))
-st.markdown("**Customer Dob:** " + strike_if_migrated(dob, mig_toggle))
-st.markdown("**Customer address:** " + addr_html, unsafe_allow_html=True)
-
-# ----------------------------------
-# Customer Notes section
-# ----------------------------------
-st.markdown("---")
-st.subheader("Customer Notes")
-
-if notes_raw is None or notes_raw.empty or "CustomerId" not in notes_raw.columns:
-    st.info("No notes for this customer (or Notes.csv not uploaded).")
-else:
-    cust_notes = notes_raw[notes_raw["CustomerId"] == customer_id].copy()
-    if cust_notes.empty:
-        st.info("No notes for this customer.")
-    else:
-        for _, nrow in cust_notes.iterrows():
-            note_id = nrow.get("NoteId", "")
-            note_text = str(nrow.get("NoteText", ""))
-            note_date = str(nrow.get("NoteDate", ""))
-
-            note_migrated = get_migrated(uid, "notes", note_id) if note_id else False
-
-            c1, c2 = st.columns([5, 1])
-            with c1:
-                display_text = strike_if_migrated(note_text, note_migrated)
-                st.markdown(f"**{note_date}** – {display_text}")
-            with c2:
-                nval = st.checkbox("Migrated", value=note_migrated, key=f"note_mig_{note_id}")
-                if nval != note_migrated and note_id:
-                    set_migrated(uid, "notes", note_id, nval)
-
-
-# ----------------------------------
-# Customer Bookings section
-# ----------------------------------
-st.markdown("---")
-st.subheader("Customer Bookings")
-
-booking_filter = st.radio(
-    "Filter bookings",
-    ["ALL", "Past", "Next 3 months", "Next 6 months", "Next 12 months"],
-    horizontal=True,
-)
-
-hide_migrated_bookings = st.checkbox("Hide migrated bookings", value=False, key="hide_migrated_bookings")
-
-if bookings_enriched is None or bookings_enriched.empty or "CustomerId" not in bookings_enriched.columns:
-    st.info("No bookings for this customer (or Bookings.csv not uploaded).")
-else:
-    cust_book = bookings_enriched[bookings_enriched["CustomerId"] == customer_id].copy()
-
-    now_dt = datetime.now()
-
-    if booking_filter == "Past":
-        cust_book = cust_book[cust_book["StartDateTimeParsed"] < now_dt]
-    elif booking_filter.startswith("Next"):
-        months = int(booking_filter.split()[1])
-        upper = now_dt + timedelta(days=30 * months)
-        cust_book = cust_book[
-            (cust_book["StartDateTimeParsed"] >= now_dt) &
-            (cust_book["StartDateTimeParsed"] <= upper)
-        ]
-
-    rows = []
-    for _, brow in cust_book.iterrows():
-        bid = brow.get("BookingId")
-        migrated_booking = to_bool(brow.get("migrated", False))
-
-        if hide_migrated_bookings and migrated_booking:
-            continue
-
-        staff = str(brow.get("Staff", ""))
-        service_id = str(brow.get("ServiceId", ""))
-        service = str(brow.get("Service", ""))
-        recurring = "Yes" if brow.get("RecurringBool") else "No"
-        return_booking = "Yes" if brow.get("ReturnBooking") else "No"
-
-        sd = brow.get("StartDateTimeParsed")
-        ed = brow.get("EndDateTimeParsed")
-        start_date = sd.date().isoformat() if pd.notna(sd) else ""
-        start_time = sd.time().strftime("%H:%M") if pd.notna(sd) else ""
-        end_date = ed.date().isoformat() if pd.notna(ed) else ""
-        end_time = ed.time().strftime("%H:%M") if pd.notna(ed) else ""
-
-        if show_clean:
-            from_addr = brow.get("BookingFrom", "")
-            to_addr = brow.get("BookingTo", "")
-            extra_notes = brow.get("BookingExtraNotes", "")
-            from_guess = bool(brow.get("BookingFromIsGuessed", False))
-            to_guess = bool(brow.get("BookingToIsGuessed", False))
-        else:
-            from_addr = ""
-            to_addr = ""
-            extra_notes = str(brow.get("Notes", ""))
-            from_guess = False
-            to_guess = False
-
-        from_html = style_address_html(from_addr, from_guess)
-        to_html = style_address_html(to_addr, to_guess)
-
-        rows.append(
-            {
-                "BookingId": bid,
-                "Migrated": migrated_booking,
-                "Staff": staff,
-                "Service": f"{service_id} – {service}" if service_id else service,
-                "Recurring": recurring,
-                "ReturnBooking": return_booking,
-                "StartDate": start_date,
-                "StartTime": start_time,
-                "EndDate": end_date,
-                "EndTime": end_time,
-                "FROM_html": strike_if_migrated(from_html, migrated_booking),
-                "TO_html": strike_if_migrated(to_html, migrated_booking),
-                "Notes": strike_if_migrated(extra_notes, migrated_booking),
+            # Friendly labels
+            label_map = {
+                "FirstName": "First Name",
+                "LastName": "Second Name",
+                "Telephone": "Mobile Number",
+                "SMS": "Mobile Number",
+                "PhysicalAddress": "Address",
+                "DateOfBirth": "Dob",
+                "CompanyName": "Company Name",
             }
-        )
+            label = label_map.get(col, col)
 
-    if not rows:
-        st.info("No bookings match the current filters.")
+            col1.markdown(f"**{label}**")
+            display_val = val
+            if pd.isna(display_val) or str(display_val).strip() == "":
+                display_val = "*no data*"
+            col2.code(str(display_val), language=None)
+
+    # Customer migrated toggle
+    if to_bool(selected_row.get("Migrated", False)):
+        st.success("✓ Customer migrated")
     else:
-        for row in rows:
-            bid = row["BookingId"]
-            migrated_booking = row["Migrated"]
-            c1, c2, c3 = st.columns([3, 3, 1])
-            with c1:
-                st.markdown(
-                    f"**{row['StartDate']} {row['StartTime']} → {row['EndDate']} {row['EndTime']}**"
-                )
-                st.markdown(f"Staff: {row['Staff']}")
-                st.markdown(f"Service: {row['Service']}")
-                st.markdown(f"Recurring: {row['Recurring']} | Return: {row['ReturnBooking']}")
-            with c2:
-                st.markdown("FROM: " + row["FROM_html"], unsafe_allow_html=True)
-                st.markdown("TO: " + row["TO_html"], unsafe_allow_html=True)
-                st.markdown("Notes: " + row["Notes"])
-            with c3:
-                new_val = st.checkbox("Migrated", value=migrated_booking, key=f"booking_mig_{bid}")
-                if new_val != migrated_booking and bid is not None:
-                    set_migrated(uid, "bookings", bid, new_val)
-                    st.cache_data.clear()
+        if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
+            set_migrated(uid, "customers", customer_id, True)
+            st.cache_data.clear()
+            st.rerun()
+"Migrated", False)):
+        st.success("✓ Customer migrated")
+    else:
+        if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
+            set_migrated(uid, "customers", customer_id, True)
+            st.cache_data.clear()
+            st.rerun()
 
+    # Notes
+    st.subheader("📝 Notes")
+    if not notes.empty and "CustomerId" in notes.columns:
+        cust_notes = notes[notes["CustomerId"] == customer_id]
+    else:
+        cust_notes = pd.DataFrame()
+
+    if cust_notes.empty:
+        st.info("No notes for this customer (or Notes.csv not uploaded).")
+    else:
+        for _, n in cust_notes.iterrows():
+            st.code(n.get("NoteText", ""))
+
+        if "Migrated" in cust_notes.columns and cust_notes["Migrated"].map(to_bool).any():
+            st.success("✓ Notes migrated")
+        else:
+            if st.button("✅ Mark notes as migrated", key="migrate_notes"):
+                set_migrated(uid, "notes", customer_id, True)
+                st.cache_data.clear()
+                st.rerun()
+
+    # Bookings
+    st.subheader("📅 Bookings")
+
+    if bookings.empty or "CustomerId" not in bookings.columns:
+        st.info("No bookings for this customer (or Bookings.csv not uploaded).")
+    else:
+        cust_bookings = bookings[bookings["CustomerId"] == customer_id].copy()
+
+        if cust_bookings.empty:
+            st.info("No bookings for this customer.")
+        else:
+            if "StartDateTime" not in cust_bookings.columns or "EndDateTime" not in cust_bookings.columns:
+                st.error("Cannot find StartDateTime/EndDateTime columns in bookings.")
+            else:
+                # Parse dates
+                cust_bookings["StartDateTimeParsed"] = pd.to_datetime(
+                    cust_bookings["StartDateTime"], errors="coerce"
+                )
+                cust_bookings["EndDateTimeParsed"] = pd.to_datetime(
+                    cust_bookings["EndDateTime"], errors="coerce"
+                )
+
+                cust_bookings["StartDate"] = cust_bookings["StartDateTimeParsed"].dt.strftime("%d/%m/%Y")
+                cust_bookings["StartTime"] = cust_bookings["StartDateTimeParsed"].dt.strftime("%H:%M")
+                cust_bookings["EndDate"] = cust_bookings["EndDateTimeParsed"].dt.strftime("%d/%m/%Y")
+                cust_bookings["EndTime"] = cust_bookings["EndDateTimeParsed"].dt.strftime("%H:%M")
+
+                col1, col2 = st.columns([0.7, 0.3])
+                with col1:
+                    filter_option = st.radio(
+                        "Show bookings:",
+                        ["All", "Past", "Next 3 Months", "Next 6 Months", "Next 12 Months"],
+                        horizontal=True
+                    )
+                with col2:
+                    exclude_migrated_in_view = st.checkbox("Hide migrated", value=False, key="hide_migrated_bookings")
+
+
+                now_dt = datetime.now()
+                future_ranges = {
+                    "Next 3 Months": now_dt + timedelta(days=90),
+                    "Next 6 Months": now_dt + timedelta(days=180),
+                    "Next 12 Months": now_dt + timedelta(days=365),
+                }
+
+                if filter_option == "Past":
+                    cust_bookings = cust_bookings[cust_bookings["StartDateTimeParsed"] < now_dt]
+                elif filter_option in future_ranges:
+                    end_date = future_ranges[filter_option]
+                    cust_bookings = cust_bookings[
+                        (cust_bookings["StartDateTimeParsed"] >= now_dt) &
+                        (cust_bookings["StartDateTimeParsed"] <= end_date)
+                    ]
+                # Filter out migrated bookings if checkbox is selected
+                if exclude_migrated_in_view:
+                    cust_bookings = cust_bookings[~cust_bookings["migrated"].map(to_bool)]
+
+                for idx, b in cust_bookings.iterrows():
+                    is_migrated = to_bool(b.get("migrated", False))
+
+                    color = "#3cb371" if b["StartDateTimeParsed"] >= now_dt else "#888888"
+                    strike = "text-decoration: line-through;" if is_migrated else ""
+
+                    st.markdown(
+                        f"<div style='background-color:{color}25;padding:8px;"
+                        f"border-radius:6px;margin-bottom:6px;{strike}'>"
+                        f"<b>{b.get('Staff', '')}</b> | {b.get('Service', '')} | "
+                        f"{b['StartDate']} {b['StartTime']} → "
+                        f"{b['EndDate']} {b['EndTime']}"
+                        f"</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    fields = {
+                        "Service": b.get("Service", ""),
+                        "Staff": b.get("Staff", ""),
+                        "Price": b.get("Price", ""),
+                        "Recurring Booking": "Yes" if to_bool(b.get("RecurringAppointment")) else "No",
+                        "Return Trip": "Yes" if to_bool(b.get("ReturnTrip")) else "No",
+                        "Start Date": b["StartDate"],
+                        "Start Time": b["StartTime"],
+                        "End Date": b["EndDate"],
+                        "End Time": b["EndTime"],
+                    }
+
+                    # Reduce spacing between booking fields
+                    st.markdown("""
+
+                        <style>
+                        div[data-testid="stVerticalBlock"] > div:has(div.stCodeBlock) {
+                            margin-bottom: -1rem;
+                        }
+                        </style>
+                    """, unsafe_allow_html=True)
+
+                    for label, val in fields.items():
+                        col1, col2 = st.columns([0.3, 0.7])
+                        col1.markdown(f"**{label}**")
+                        if is_migrated:
+                            col2.markdown(
+                                f"<code style='text-decoration: line-through;'>{val}</code>",
+                                unsafe_allow_html=True
+                            )
+                        else:
+                            col2.code(str(val), language=None)
+
+                    notes_txt = b.get("Notes", "")
+                    if notes_txt and str(notes_txt) != "nan":
+                        st.markdown("**Notes**")
+                        
+                        # Escape backticks and quotes for JavaScript
+                        escaped_notes = str(notes_txt).replace('\\', '\\\\').replace('`', '\\`').replace("'", "\\'")
+                        
+                        strike = "text-decoration: line-through;" if is_migrated else ""
+                        
+                        st.markdown(
+                            f"<style>"
+                            f".notes-container-{idx} .copy-btn {{ opacity: 0; transition: opacity 0.2s; }}"
+                            f".notes-container-{idx}:hover .copy-btn {{ opacity: 1; }}"
+                            f"</style>"
+                            f"<div class='notes-container-{idx}' style='position: relative;'>"
+                            f"<button class='copy-btn' onclick=\"navigator.clipboard.writeText(`{escaped_notes}`)\" "
+                            f"style='position: absolute; top: 8px; right: 8px; z-index: 10; background: white; border: 1px solid #ccc; "
+                            f"border-radius: 3px; padding: 4px 8px; cursor: pointer; font-size: 12px;'>📋</button>"
+                            f"<pre style='max-height: 150px; overflow-y: auto; background-color: #f0f0f0; "
+                            f"padding: 0.5rem; border-radius: 0.25rem; border: 1px solid rgba(49, 51, 63, 0.2); "
+                            f"{strike} white-space: pre-wrap; font-family: \"Source Code Pro\", monospace; font-size: 14px; margin: 0;'>{notes_txt}</pre>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    # Per-booking migration toggle (uses BookingId)
+                    booking_id = b.get("BookingId", None)
+                    if booking_id is not None and booking_id != "":
+                        if is_migrated:
+                            st.success("✓ This booking is marked as migrated.")
+                        else:
+                            if st.button(
+                                "✅ Mark this booking as migrated",
+                                key=f"migrate-booking-{booking_id}-{idx}"
+                            ):
+                                set_migrated(uid, "bookings", booking_id, True)
+                                st.cache_data.clear()
+                                st.rerun()
+                    else:
+                        st.warning("⚠️ This booking row has no BookingId – cannot persist migrated state.")
+
+                    st.markdown("---")
