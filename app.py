@@ -694,10 +694,10 @@ if selected_customer:
             set_migrated(uid, "customers", customer_id, True)
             st.cache_data.clear()
             st.rerun()
-"Migrated", False)):
+        "Migrated", False)):
         st.success("✓ Customer migrated")
     else:
-        if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
+    if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
             set_migrated(uid, "customers", customer_id, True)
             st.cache_data.clear()
             st.rerun()
