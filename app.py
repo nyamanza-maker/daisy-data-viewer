@@ -680,7 +680,7 @@ st.markdown("---")
 if "current_search" not in st.session_state:
     st.session_state["current_search"] = ""
 
-search_query = st.text_input(
+search_query = st.sidebar.text_input(
     "🔍 Search customers by name, company, or phone",
     value=st.session_state["current_search"],
     key="search_input",
@@ -690,14 +690,10 @@ search_query = st.text_input(
 if search_query != st.session_state["current_search"]:
     st.session_state["current_search"] = search_query
 
-# Filters
-col1, col2, col3 = st.columns(3)
-with col1:
-    exclude_migrated = st.checkbox("Hide migrated customers", value=True)
-with col2:
-    future_only = st.checkbox("Only with future bookings", value=False)
-with col3:
-    max_results = st.number_input("Max results", 25, 5000, 200, 25)
+# Filters (Sidebar)
+exclude_migrated = st.sidebar.checkbox("Hide migrated customers", value=True)
+future_only = st.sidebar.checkbox("Only with future bookings", value=False)
+max_results = st.sidebar.number_input("Max results", 25, 5000, 200, 25)
 
 # Apply filters
 if "CustomerName" in customers.columns:
@@ -905,12 +901,7 @@ else:
     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
     # Notes view badge for cleansed/original
     notes_view_is_cleansed = bool(st.session_state.get("view_mode_notes", True))
-    notes_badge_class = "badge-clean" if notes_view_is_cleansed else "badge-original"
-    notes_badge_text = "CLEANSED" if notes_view_is_cleansed else "ORIGINAL"
-    st.markdown(
-        f"<div class='view-toggle'><span class='data-badge {notes_badge_class}'>{notes_badge_text}</span></div>",
-        unsafe_allow_html=True,
-    )
+    # Badge is implicit via the right-aligned toggle; remove extra box
     
     for idx, note in customer_notes.iterrows():
         is_note_migrated = to_bool(note.get("Migrated", False))
