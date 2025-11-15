@@ -6,3 +6,4 @@ google-cloud-storage
 pandas
 python-dotenv
 setuptools
+requests
