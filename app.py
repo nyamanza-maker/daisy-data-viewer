@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 import requests
+import html
 
 import pyrebase
 import firebase_admin
@@ -379,6 +380,22 @@ def extract_booking_addresses(notes_text: str) -> Dict[str, str]:
         "to": to_addr,
         "notes": remaining
     }
+
+def clean_note_text(note_text: str) -> str:
+    """Lightweight cleansing for free‑text notes.
+    - Normalize whitespace and newlines
+    - Remove BOM/non‑breaking spaces
+    - Collapse decorative asterisks
+    """
+    if pd.isna(note_text):
+        return ""
+    t = str(note_text)
+    t = t.replace("\ufeff", "").replace("\u00a0", " ")
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = "\n".join(line.strip() for line in t.split("\n"))
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\*{2,}", "*", t)
+    return t.strip()
 
 # ----------------------------------
 # Session State Initialization
@@ -752,14 +769,21 @@ else:
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 
-view_is_cleansed = st.session_state["view_mode"] == "cleansed"
-badge_class = "badge-clean" if view_is_cleansed else "badge-original"
-badge_text = "CLEANSED" if view_is_cleansed else "ORIGINAL"
+# Customer section view toggle
+cust_cleansed = st.checkbox(
+    "Cleansed view",
+    value=st.session_state.get("view_mode_customer", True),
+    key="view_toggle_customer",
+)
+st.session_state["view_mode_customer"] = bool(cust_cleansed)
+cust_view_is_cleansed = bool(cust_cleansed)
+badge_class = "badge-clean" if cust_view_is_cleansed else "badge-original"
+badge_text = "CLEANSED" if cust_view_is_cleansed else "ORIGINAL"
 
 st.markdown(f"### Customer Information <span class='data-badge {badge_class}'>{badge_text}</span>", unsafe_allow_html=True)
 
 # Display customer fields
-if view_is_cleansed:
+if cust_view_is_cleansed:
     fields = {
         "First Name": selected_customer.get("CleanFirstName", ""),
         "Last Name": selected_customer.get("CleanLastName", ""),
@@ -861,12 +885,28 @@ if "PhysicalAddress" in selected_customer and pd.notna(selected_customer["Physic
 # ----------------------------------
 st.markdown("### 📝 Customer Notes")
 
+# Notes section view toggle (UI only)
+notes_cleansed = st.checkbox(
+    "Cleansed view",
+    value=st.session_state.get("view_mode_notes", True),
+    key="view_toggle_notes",
+)
+st.session_state["view_mode_notes"] = bool(notes_cleansed)
+
 customer_notes = notes[notes["CustomerId"] == customer_id] if "CustomerId" in notes.columns else pd.DataFrame()
 
 if customer_notes.empty:
     st.info("No notes for this customer")
 else:
     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    # Notes view badge for cleansed/original
+    notes_view_is_cleansed = bool(st.session_state.get("view_mode_notes", True))
+    notes_badge_class = "badge-clean" if notes_view_is_cleansed else "badge-original"
+    notes_badge_text = "CLEANSED" if notes_view_is_cleansed else "ORIGINAL"
+    st.markdown(
+        f"<div class='view-toggle'><span class='data-badge {notes_badge_class}'>{notes_badge_text}</span></div>",
+        unsafe_allow_html=True,
+    )
     
     for idx, note in customer_notes.iterrows():
         is_note_migrated = to_bool(note.get("Migrated", False))
@@ -878,7 +918,16 @@ else:
             if note_date:
                 st.markdown(f"**{note_date}**")
             strike = "text-decoration: line-through;" if is_note_migrated else ""
-            st.markdown(f"<div style='{strike}'>{note_text}</div>", unsafe_allow_html=True)
+            # Choose cleansed or original text
+            if notes_view_is_cleansed:
+                display_text = note.get("CleanNoteText") or clean_note_text(note_text)
+            else:
+                display_text = str(note_text or "")
+            st.markdown(
+                f"<div style='{strike}'><pre style='white-space: pre-wrap; margin: 0;'>" +
+                f"{html.escape(display_text)}</pre></div>",
+                unsafe_allow_html=True,
+            )
         
         with col2:
             if is_note_migrated:
@@ -903,8 +952,8 @@ customer_bookings = bookings[bookings["CustomerId"] == customer_id].copy() if "C
 if customer_bookings.empty:
     st.info("No bookings for this customer")
 else:
-    # Booking filters
-    col1, col2 = st.columns([0.7, 0.3])
+    # Booking filters + view toggle
+    col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
     
     with col1:
         booking_filter = st.radio(
@@ -916,6 +965,13 @@ else:
     
     with col2:
         hide_migrated_bookings = st.checkbox("Hide migrated", value=False, key="hide_migrated")
+    with col3:
+        book_cleansed = st.checkbox(
+            "Cleansed view",
+            value=st.session_state.get("view_mode_bookings", True),
+            key="view_toggle_bookings",
+        )
+        st.session_state["view_mode_bookings"] = bool(book_cleansed)
     
     # Parse dates
     if "StartDateTime" in customer_bookings.columns:
@@ -1010,7 +1066,8 @@ else:
             st.markdown("<div class='section-card'>", unsafe_allow_html=True)
             
             # Show cleansed or original based on view mode
-            if view_is_cleansed:
+            book_view_is_cleansed = bool(st.session_state.get("view_mode_bookings", True))
+            if book_view_is_cleansed:
                 fields = {
                     "Service": booking.get("Service", ""),
                     "Staff": booking.get("Staff", ""),
