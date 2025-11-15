@@ -660,30 +660,18 @@ st.markdown("---")
 # ----------------------------------
 # Search & Filters
 # ----------------------------------
-col1, col2 = st.columns([3, 1])
+if "current_search" not in st.session_state:
+    st.session_state["current_search"] = ""
 
-with col1:
-    if "current_search" not in st.session_state:
-        st.session_state["current_search"] = ""
-    
-    search_query = st.text_input(
-        "🔍 Search customers by name, company, or phone",
-        value=st.session_state["current_search"],
-        key="search_input",
-        placeholder="Type to search..."
-    )
-    
-    if search_query != st.session_state["current_search"]:
-        st.session_state["current_search"] = search_query
+search_query = st.text_input(
+    "🔍 Search customers by name, company, or phone",
+    value=st.session_state["current_search"],
+    key="search_input",
+    placeholder="Type to search..."
+)
 
-with col2:
-    view_mode = st.radio(
-        "Data View",
-        ["Cleansed", "Original"],
-        horizontal=True,
-        key="view_mode_radio"
-    )
-    st.session_state["view_mode"] = view_mode.lower()
+if search_query != st.session_state["current_search"]:
+    st.session_state["current_search"] = search_query
 
 # Filters
 col1, col2, col3 = st.columns(3)
