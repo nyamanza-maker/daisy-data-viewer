@@ -681,9 +681,9 @@ if "current_search" not in st.session_state:
     st.session_state["current_search"] = ""
 
 search_query = st.sidebar.text_input(
-    "🔍 Search customers by name, company, or phone",
+    "Search customers by name, company, or phone",
     value=st.session_state["current_search"],
-    key="search_input",
+    key="sidebar_search_input",
     placeholder="Type to search..."
 )
 
@@ -694,6 +694,13 @@ if search_query != st.session_state["current_search"]:
 exclude_migrated = st.sidebar.checkbox("Hide migrated customers", value=True)
 future_only = st.sidebar.checkbox("Only with future bookings", value=False)
 max_results = st.sidebar.number_input("Max results", 25, 5000, 200, 25)
+
+# Cleanup legacy widget state if present
+if "search_input" in st.session_state:
+    try:
+        del st.session_state["search_input"]
+    except Exception:
+        pass
 
 # Apply filters
 if "CustomerName" in customers.columns:
