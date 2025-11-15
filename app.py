@@ -687,20 +687,14 @@ if selected_customer:
             col2.code(str(display_val), language=None)
 
     # Customer migrated toggle
-    if to_bool(selected_row.get("Migrated", False)):
-        st.success("✓ Customer migrated")
-    else:
-        if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
-            set_migrated(uid, "customers", customer_id, True)
-            st.cache_data.clear()
-            st.rerun()
-        "Migrated", False)):
-        st.success("✓ Customer migrated")
-    else:
+if to_bool(selected_row.get("Migrated", False)):
+    st.success("✓ Customer migrated")
+else:
     if st.button("✅ Mark this customer as migrated", key="migrate_customer"):
-            set_migrated(uid, "customers", customer_id, True)
-            st.cache_data.clear()
-            st.rerun()
+        set_migrated(uid, "customers", customer_id, True)
+        st.cache_data.clear()
+        st.rerun()
+        
 
     # Notes
     st.subheader("📝 Notes")
