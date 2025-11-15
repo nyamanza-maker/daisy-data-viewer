@@ -770,9 +770,7 @@ else:
         st.cache_data.clear()
         st.rerun()
 
-st.markdown("<div class='section-card'>", unsafe_allow_html=True)
-
-# Customer section view toggle (right-aligned)
+# Customer section view toggle + header on one row
 cust_head_left, cust_head_right = st.columns([0.8, 0.2])
 with cust_head_right:
     cust_cleansed = st.checkbox(
@@ -784,8 +782,14 @@ st.session_state["view_mode_customer"] = bool(cust_cleansed)
 cust_view_is_cleansed = bool(cust_cleansed)
 badge_class = "badge-clean" if cust_view_is_cleansed else "badge-original"
 badge_text = "CLEANSED" if cust_view_is_cleansed else "ORIGINAL"
+with cust_head_left:
+    st.markdown(
+        f"### Customer Information <span class='data-badge {badge_class}'>{badge_text}</span>",
+        unsafe_allow_html=True,
+    )
 
-st.markdown(f"### Customer Information <span class='data-badge {badge_class}'>{badge_text}</span>", unsafe_allow_html=True)
+# Now start the section card for customer fields
+st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 
 # Display customer fields
 if cust_view_is_cleansed:
@@ -1061,11 +1065,15 @@ else:
             </div>
         """, unsafe_allow_html=True)
         
-        st.markdown("</div>", unsafe_allow_html=True)
-
-        # Per-booking view toggle (right-aligned)
-        header_spacer, header_toggle = st.columns([0.8, 0.2])
-        with header_toggle:
+        # Per-booking view toggle placed inside card header row
+        _left, _right = st.columns([0.85, 0.15])
+        with _left:
+            header_text = f"**{staff}** | {service} | {start_date} {start_time} → {end_date} {end_time}"
+            if is_migrated:
+                st.markdown(f"<div style='{strike}'>{header_text}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(header_text)
+        with _right:
             _default = bool(st.session_state.get("view_mode_bookings", True))
             _toggle_key = f"view_mode_booking_{booking_id or idx}"
             _val = st.checkbox(
@@ -1074,6 +1082,8 @@ else:
                 key=f"toggle_{booking_id or idx}",
             )
             st.session_state[_toggle_key] = bool(_val)
+
+        st.markdown("</div>", unsafe_allow_html=True)
         
         # Booking details in expandable section
         with st.expander("View booking details", expanded=False):
