@@ -769,12 +769,14 @@ else:
 
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 
-# Customer section view toggle
-cust_cleansed = st.checkbox(
-    "Cleansed view",
-    value=st.session_state.get("view_mode_customer", True),
-    key="view_toggle_customer",
-)
+# Customer section view toggle (right-aligned)
+cust_head_left, cust_head_right = st.columns([0.8, 0.2])
+with cust_head_right:
+    cust_cleansed = st.checkbox(
+        "Cleansed view",
+        value=st.session_state.get("view_mode_customer", True),
+        key="view_toggle_customer",
+    )
 st.session_state["view_mode_customer"] = bool(cust_cleansed)
 cust_view_is_cleansed = bool(cust_cleansed)
 badge_class = "badge-clean" if cust_view_is_cleansed else "badge-original"
@@ -885,12 +887,14 @@ if "PhysicalAddress" in selected_customer and pd.notna(selected_customer["Physic
 # ----------------------------------
 st.markdown("### 📝 Customer Notes")
 
-# Notes section view toggle (UI only)
-notes_cleansed = st.checkbox(
-    "Cleansed view",
-    value=st.session_state.get("view_mode_notes", True),
-    key="view_toggle_notes",
-)
+# Notes section view toggle (right-aligned, UI only)
+notes_head_left, notes_head_right = st.columns([0.8, 0.2])
+with notes_head_right:
+    notes_cleansed = st.checkbox(
+        "Cleansed view",
+        value=st.session_state.get("view_mode_notes", True),
+        key="view_toggle_notes",
+    )
 st.session_state["view_mode_notes"] = bool(notes_cleansed)
 
 customer_notes = notes[notes["CustomerId"] == customer_id] if "CustomerId" in notes.columns else pd.DataFrame()
@@ -1060,14 +1064,28 @@ else:
         """, unsafe_allow_html=True)
         
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # Per-booking view toggle (right-aligned)
+        header_spacer, header_toggle = st.columns([0.8, 0.2])
+        with header_toggle:
+            _default = bool(st.session_state.get("view_mode_bookings", True))
+            _toggle_key = f"view_mode_booking_{booking_id or idx}"
+            _val = st.checkbox(
+                "Cleansed view",
+                value=bool(st.session_state.get(_toggle_key, _default)),
+                key=f"toggle_{booking_id or idx}",
+            )
+            st.session_state[_toggle_key] = bool(_val)
         
         # Booking details in expandable section
         with st.expander("View booking details", expanded=False):
             st.markdown("<div class='section-card'>", unsafe_allow_html=True)
             
-            # Show cleansed or original based on view mode
-            book_view_is_cleansed = bool(st.session_state.get("view_mode_bookings", True))
-            if book_view_is_cleansed:
+            # Show cleansed or original based on per-booking toggle
+            default_book_view = bool(st.session_state.get("view_mode_bookings", True))
+            booking_key = f"view_mode_booking_{booking_id or idx}"
+            booking_view_is_cleansed = bool(st.session_state.get(booking_key, default_book_view))
+            if booking_view_is_cleansed:
                 fields = {
                     "Service": booking.get("Service", ""),
                     "Staff": booking.get("Staff", ""),
