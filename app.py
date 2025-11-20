@@ -911,6 +911,16 @@ else:
 st.markdown("### 📅 Customer Bookings")
 
 customer_bookings = bookings[bookings["CustomerId"] == customer_id].copy() if "CustomerId" in bookings.columns else pd.DataFrame()
+# Link to the global calendar / schedule view
+try:
+    st.page_link(
+        "pages/1_Booking_Calendar.py",
+        label="Open full booking calendar",
+        icon="📆",
+    )
+except Exception:
+    # Fallback: simple link text for older Streamlit versions
+    st.info("To see a global calendar view, open the 'Booking Calendar' page in the sidebar.")
 
 if customer_bookings.empty:
     st.info("No bookings for this customer")
