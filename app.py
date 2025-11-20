@@ -257,19 +257,36 @@ class CachedGeocoder:
 # 4. FIREBASE & SETUP
 # -----------------------------------------------------------------------------
 def init_firebase():
+    # 1. Get Secrets
     fb_sec = st.secrets.get("FIREBASE")
     if not fb_sec: st.error("Missing FIREBASE secrets"); st.stop()
     
-    # Client SDK
-    config = {k:v for k,v in fb_sec.items() if k in ['apiKey','authDomain','projectId','storageBucket','messagingSenderId','appId','databaseURL']}
+    # 2. Construct Config (Restoring your original safety logic)
+    config = {
+        "apiKey": fb_sec.get("api_key"),
+        "authDomain": fb_sec.get("auth_domain"),
+        "projectId": fb_sec.get("project_id"),
+        "storageBucket": fb_sec.get("storage_bucket"),
+        "messagingSenderId": fb_sec.get("messaging_sender_id"),
+        "appId": fb_sec.get("app_id"),
+        # THIS IS THE FIX: Restoring the dummy fallback you had originally
+        "databaseURL": fb_sec.get("database_url", "https://dummy-placeholder.firebaseio.com")
+    }
+    
+    # 3. Initialize Client
     firebase_app = pyrebase.initialize_app(config)
     
-    # Admin SDK
+    # 4. Initialize Admin (Firestore)
     db = None
     if "admin_json" in fb_sec:
         try:
             admin_data = fb_sec["admin_json"]
-            cred_info = json.loads(admin_data) if isinstance(admin_data, str) else dict(admin_data)
+            # Handle both string content or parsed dict
+            if isinstance(admin_data, str):
+                cred_info = json.loads(admin_data)
+            else:
+                cred_info = dict(admin_data)
+                
             if not firebase_admin._apps:
                 cred = credentials.Certificate(cred_info)
                 firebase_admin.initialize_app(cred)
@@ -278,11 +295,6 @@ def init_firebase():
             st.warning(f"Firestore init failed: {e}")
 
     return firebase_app, db
-
-firebase, db = init_firebase()
-auth = firebase.auth()
-storage = firebase.storage()
-
 # -----------------------------------------------------------------------------
 # 5. DATA ENGINE (Cached & Cleansed)
 # -----------------------------------------------------------------------------
