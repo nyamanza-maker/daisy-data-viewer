@@ -1,6 +1,6 @@
 """
-Daisy Data Viewer - Enterprise Edition
-High-performance Master-Detail UI with Optimistic State Management
+Daisy Data Viewer - Enterprise Edition v2
+High-performance Master-Detail UI with Geocoding, Advanced Filters, and Smart Caching
 """
 
 import io
@@ -8,8 +8,8 @@ import json
 import re
 import time
 import uuid
-from datetime import datetime
-from typing import Dict, Optional, Tuple
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -24,40 +24,31 @@ from firebase_admin import credentials, firestore
 st.set_page_config(
     page_title="Daisy Data Viewer",
     layout="wide",
-    initial_sidebar_state="collapsed", # Collapsed because we use a custom split layout
-    page_icon="⚡"
+    initial_sidebar_state="expanded",
+    page_icon="🚗"
 )
 
 # INJECT CUSTOM CSS & JS FOR CLIPBOARD & LAYOUT
 st.markdown("""
     <style>
-    /* Global Reset & Fonts */
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
 
-    /* Layout Tweaks */
-    .block-container {
-        padding-top: 2rem;
-        padding-bottom: 2rem;
-        padding-left: 3rem;
-        padding-right: 3rem;
-        max-width: 100%;
-    }
-
     /* Custom Card for Data Fields */
     .data-field-card {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
+        background-color: #f8f9fa;
+        border: 1px solid #e9ecef;
         border-radius: 8px;
-        padding: 12px 16px;
-        margin-bottom: 10px;
+        padding: 10px 14px;
+        margin-bottom: 8px;
         cursor: pointer;
         transition: all 0.2s ease;
         position: relative;
-        overflow: hidden;
+        display: flex;
+        flex-direction: column;
     }
     
     .stDark .data-field-card {
@@ -67,33 +58,51 @@ st.markdown("""
 
     .data-field-card:hover {
         border-color: #FF4B4B;
-        transform: translateY(-1px);
+        background-color: #fff;
         box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    }
+    
+    .stDark .data-field-card:hover {
+        background-color: #31333F;
+    }
+
+    .card-header-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 4px;
     }
 
     .data-field-label {
-        font-size: 0.75rem;
+        font-size: 0.7rem;
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: #888;
-        margin-bottom: 4px;
         font-weight: 600;
     }
     
+    .copy-icon {
+        font-size: 0.8rem;
+        opacity: 0.3;
+    }
+    
+    .data-field-card:hover .copy-icon {
+        opacity: 1;
+        color: #FF4B4B;
+    }
+    
     .data-field-value {
-        font-size: 1rem;
+        font-size: 0.95rem;
         font-weight: 500;
         color: #111;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        word-break: break-word;
     }
     
     .stDark .data-field-value {
         color: #fff;
     }
 
-    /* Copy Feedback Toast */
+    /* Toast Notification */
     #toast-container {
         position: fixed;
         bottom: 20px;
@@ -104,41 +113,31 @@ st.markdown("""
     .toast {
         background: #333;
         color: white;
-        padding: 12px 24px;
-        border-radius: 50px;
+        padding: 10px 20px;
+        border-radius: 4px;
         margin-top: 10px;
         box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         animation: fadeIn 0.3s, fadeOut 0.3s 2.5s forwards;
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        font-size: 0.9rem;
     }
 
-    @keyframes fadeIn { from { opacity: 0; transform: translateY(20px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
 
-    /* Status Badges */
-    .badge {
-        padding: 4px 12px;
-        border-radius: 12px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
-    .badge-migrated { background: #dcfce7; color: #166534; }
-    .badge-pending { background: #fef9c3; color: #854d0e; }
-    
-    /* Sidebar/Master List Styling */
+    /* Layout Utilities */
     .master-header {
-        border-bottom: 2px solid #f0f2f6;
+        border-bottom: 1px solid #eee;
         padding-bottom: 1rem;
         margin-bottom: 1rem;
     }
     
-    /* Hide default Streamlit elements */
+    /* Hide Streamlit branding */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     
+    /* Badge Styles */
+    .badge-clean { background: #e6fffa; color: #047857; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid #a7f3d0; }
+    .badge-raw { background: #f3f4f6; color: #4b5563; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; border: 1px solid #e5e7eb; }
     </style>
 
     <div id="toast-container"></div>
@@ -148,42 +147,129 @@ st.markdown("""
             const container = document.getElementById('toast-container');
             const toast = document.createElement('div');
             toast.className = 'toast';
-            toast.innerHTML = '<span>📋</span> Copied to clipboard';
+            toast.innerHTML = '📋 Copied: ' + text.substring(0, 20) + (text.length > 20 ? '...' : '');
             container.appendChild(toast);
             setTimeout(() => { toast.remove(); }, 3000);
         }, function(err) {
-            console.error('Async: Could not copy text: ', err);
+            console.error('Could not copy text: ', err);
         });
     }
     </script>
 """, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 2. FIREBASE SETUP (Robust)
+# 2. UTILS & CLEANSING LOGIC
+# -----------------------------------------------------------------------------
+def clean_customer_name(name: str) -> Tuple[str, str]:
+    """Split name into First/Last and remove noise."""
+    if pd.isna(name): return "", ""
+    noise = [r'\s*-\s*ACC\s*$', r'\s*ACC\s*$', r'\s*Albany\s*$', r'\s*TM\s*$', r'\(.*?\)', r'\s*-\s*CMA.*$']
+    cleaned = str(name).strip()
+    for pattern in noise:
+        cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+    parts = cleaned.strip().split()
+    if not parts: return "", ""
+    if len(parts) == 1: return parts[0], ""
+    return parts[0], " ".join(parts[1:])
+
+def extract_booking_notes(notes_text: str) -> Dict[str, str]:
+    """Extract TO/FROM from booking notes."""
+    if pd.isna(notes_text) or not notes_text: return {"from": "", "to": "", "notes": ""}
+    text = str(notes_text)
+    from_match = re.search(r'FROM[:\s]+([^G]*?)(?=GOING TO|TO:|$)', text, re.IGNORECASE)
+    to_match = re.search(r'(?:GOING TO|TO)[:\s]+([^*]*?)(?=\*\*|$)', text, re.IGNORECASE)
+    
+    remaining = text
+    if from_match: remaining = remaining.replace(from_match.group(0), '')
+    if to_match: remaining = remaining.replace(to_match.group(0), '')
+    remaining = re.sub(r'\*+', '', remaining).strip()
+    
+    return {
+        "from": from_match.group(1).strip() if from_match else "",
+        "to": to_match.group(1).strip() if to_match else "",
+        "notes": remaining
+    }
+
+# -----------------------------------------------------------------------------
+# 3. GEOCODING CLASSES (Restored)
+# -----------------------------------------------------------------------------
+class AddressCacheManager:
+    def __init__(self, db):
+        self.db = db
+        self.collection = "address_cache"
+
+    def get_cached_geocoding(self, raw_address):
+        if not self.db or not raw_address: return None
+        doc_id = re.sub(r'[^a-zA-Z0-9]', '', str(raw_address).lower())
+        doc = self.db.collection(self.collection).document(doc_id).get()
+        return doc.to_dict() if doc.exists else None
+
+    def cache_result(self, raw_address, result):
+        if not self.db or not raw_address: return
+        doc_id = re.sub(r'[^a-zA-Z0-9]', '', str(raw_address).lower())
+        self.db.collection(self.collection).document(doc_id).set(result)
+
+class CachedGeocoder:
+    def __init__(self, api_key, cache_mgr):
+        self.api_key = api_key
+        self.cache = cache_mgr
+    
+    def geocode(self, address):
+        # 1. Check Cache
+        cached = self.cache.get_cached_geocoding(address)
+        if cached: return cached
+        
+        # 2. Call API
+        base = "https://maps.googleapis.com/maps/api/geocode/json"
+        try:
+            r = requests.get(base, params={"address": address, "key": self.api_key})
+            data = r.json()
+            
+            if data['status'] == 'OK':
+                res = data['results'][0]
+                formatted = res['formatted_address']
+                loc = res['geometry']['location']
+                
+                # Extract components
+                comps = res['address_components']
+                suburb = next((c['long_name'] for c in comps if 'locality' in c['types']), "")
+                state = next((c['short_name'] for c in comps if 'administrative_area_level_1' in c['types']), "")
+                postal = next((c['long_name'] for c in comps if 'postal_code' in c['types']), "")
+                
+                result = {
+                    "raw": address,
+                    "valid": True,
+                    "formatted_address": formatted,
+                    "suburb": suburb, "state": state, "postcode": postal,
+                    "lat": loc['lat'], "lng": loc['lng'],
+                    "timestamp": firestore.SERVER_TIMESTAMP
+                }
+                self.cache.cache_result(address, result)
+                return result
+            else:
+                fail_res = {"raw": address, "valid": False, "error": data['status']}
+                self.cache.cache_result(address, fail_res)
+                return fail_res
+        except Exception as e:
+            return {"valid": False, "error": str(e)}
+
+# -----------------------------------------------------------------------------
+# 4. FIREBASE & SETUP
 # -----------------------------------------------------------------------------
 def init_firebase():
-    # 1. Client SDK (Auth/Storage)
     fb_sec = st.secrets.get("FIREBASE")
     if not fb_sec: st.error("Missing FIREBASE secrets"); st.stop()
     
-    config = {
-        "apiKey": fb_sec["api_key"],
-        "authDomain": fb_sec["auth_domain"],
-        "projectId": fb_sec["project_id"],
-        "storageBucket": fb_sec["storage_bucket"],
-        "messagingSenderId": fb_sec["messaging_sender_id"],
-        "appId": fb_sec["app_id"],
-        "databaseURL": fb_sec.get("database_url", ""),
-    }
+    # Client SDK
+    config = {k:v for k,v in fb_sec.items() if k in ['apiKey','authDomain','projectId','storageBucket','messagingSenderId','appId','databaseURL']}
     firebase_app = pyrebase.initialize_app(config)
     
-    # 2. Admin SDK (Firestore)
+    # Admin SDK
     db = None
     if "admin_json" in fb_sec:
         try:
             admin_data = fb_sec["admin_json"]
             cred_info = json.loads(admin_data) if isinstance(admin_data, str) else dict(admin_data)
-            
             if not firebase_admin._apps:
                 cred = credentials.Certificate(cred_info)
                 firebase_admin.initialize_app(cred)
@@ -198,24 +284,12 @@ auth = firebase.auth()
 storage = firebase.storage()
 
 # -----------------------------------------------------------------------------
-# 3. SESSION STATE & HELPERS
+# 5. DATA ENGINE (Cached & Cleansed)
 # -----------------------------------------------------------------------------
-if "auth" not in st.session_state: st.session_state["auth"] = None
-if "data_hash" not in st.session_state: st.session_state["data_hash"] = None
-if "selected_customer_id" not in st.session_state: st.session_state["selected_customer_id"] = None
-if "local_migrations" not in st.session_state: st.session_state["local_migrations"] = {}
-
-def to_bool(v):
-    if pd.isna(v): return False
-    return str(v).lower() in ("true", "1", "yes", "y", "t")
-
-# -----------------------------------------------------------------------------
-# 4. DATA ENGINE (Optimized)
-# -----------------------------------------------------------------------------
-
-@st.cache_data(show_spinner=False, ttl=3600) # Cache for 1 hour
-def download_raw_data(uid, id_token):
-    """Downloads CSVs once. Does NOT handle migration status."""
+@st.cache_data(show_spinner=False, ttl=3600)
+def load_and_clean_data(uid, id_token):
+    start_time = time.time()
+    
     def get_df(fname):
         path = f"franchises/{uid}/{fname}"
         url = f"https://firebasestorage.googleapis.com/v0/b/{st.secrets['FIREBASE']['storage_bucket']}/o/{path.replace('/', '%2F')}?alt=media"
@@ -230,78 +304,84 @@ def download_raw_data(uid, id_token):
     notes = get_df("Notes.csv")
     bookings = get_df("Bookings.csv")
     
-    # Initialize empty if missing
-    if cust is None: cust = pd.DataFrame(columns=["CustomerId", "CustomerName", "Telephone"])
-    if notes is None: notes = pd.DataFrame(columns=["CustomerId", "NoteText"])
+    # Initialize defaults
+    if cust is None: cust = pd.DataFrame(columns=["CustomerId", "CustomerName"])
     if bookings is None: bookings = pd.DataFrame(columns=["BookingId", "CustomerId", "StartDateTime"])
 
-    # Basic Cleanup (Done once)
+    # --- PROCESSING ---
+    
+    # 1. Ensure IDs are Strings for merging
+    cust["CustomerId"] = cust["CustomerId"].astype(str).str.split('.').str[0]
+    if not bookings.empty and "CustomerId" in bookings.columns:
+        bookings["CustomerId"] = bookings["CustomerId"].astype(str).str.split('.').str[0]
+    if notes is not None and not notes.empty:
+         notes["CustomerId"] = notes["CustomerId"].astype(str).str.split('.').str[0]
+
+    # 2. Clean Customers
     if "CustomerName" in cust.columns:
         cust["DisplayName"] = cust["CustomerName"].fillna(cust.get("CompanyName", "Unknown"))
+        cleaned_names = cust["DisplayName"].apply(clean_customer_name)
+        cust["CleanFirstName"] = cleaned_names.apply(lambda x: x[0])
+        cust["CleanLastName"] = cleaned_names.apply(lambda x: x[1])
     
-    # Ensure ID is string for merging
-    cust["CustomerId"] = cust["CustomerId"].astype(str)
-    
-    return cust, notes, bookings
+    # 3. Process Bookings (Dates & Notes)
+    if not bookings.empty:
+        bookings["StartDT"] = pd.to_datetime(bookings["StartDateTime"], errors='coerce')
+        if "Notes" in bookings.columns:
+            extracted = bookings["Notes"].apply(extract_booking_notes)
+            bookings["CleanFrom"] = extracted.apply(lambda x: x["from"])
+            bookings["CleanTo"] = extracted.apply(lambda x: x["to"])
 
-def get_migration_status(uid, customer_ids):
-    """
-    Fetches migration status from Firestore. 
-    This is separate so we don't re-download CSVs when refreshing status.
-    """
+    load_time = time.time() - start_time
+    return cust, notes, bookings, load_time
+
+def get_migration_status(uid):
+    """Fetches migration map from Firestore."""
     if not db: return {}
-    
-    # Performance: If list is huge, we might fetch all collection docs instead of querying
-    # For now, fetch all migration docs for this franchise
-    ref = db.collection("migrations").document(uid).collection("customers")
-    docs = ref.stream()
-    
-    status_map = {}
-    for d in docs:
-        if d.to_dict().get("migrated", False):
-            status_map[d.id] = True
-    return status_map
-
-def update_migration(uid, customer_id, status):
-    """Updates Firestore and Local State immediately"""
-    # 1. Update Local State (Instant UI feedback)
-    st.session_state["local_migrations"][str(customer_id)] = status
-    
-    # 2. Update Firestore (Background-ish)
-    if db:
-        doc_ref = db.collection("migrations").document(uid).collection("customers").document(str(customer_id))
-        doc_ref.set({"migrated": status}, merge=True)
+    try:
+        # Fetch all at once for performance
+        docs = db.collection("migrations").document(uid).collection("customers").stream()
+        return {d.id: True for d in docs if d.to_dict().get("migrated")}
+    except:
+        return {}
 
 # -----------------------------------------------------------------------------
-# 5. UI COMPONENTS
+# 6. SESSION STATE
 # -----------------------------------------------------------------------------
+if "auth" not in st.session_state: st.session_state["auth"] = None
+if "local_migrations" not in st.session_state: st.session_state["local_migrations"] = None
+if "view_mode" not in st.session_state: st.session_state["view_mode"] = "Cleansed"
 
-def render_copy_field(label, value, width=1):
-    """Renders a beautiful clickable card that invokes the JS copy function"""
-    if pd.isna(value) or str(value).strip() == "":
-        return # Don't render empty fields to keep UI clean
+# -----------------------------------------------------------------------------
+# 7. UI COMPONENTS
+# -----------------------------------------------------------------------------
+def render_copy_card(label, value):
+    """Renders a clickable card that copies value to clipboard."""
+    if pd.isna(value) or str(value).strip() == "": return
     
     clean_val = str(value).strip()
-    escaped_val = clean_val.replace("'", "\\'") # Escape for JS
+    escaped_val = clean_val.replace("'", "\\'").replace('"', '&quot;')
     
     html = f"""
     <div class="data-field-card" onclick="copyToClipboard('{escaped_val}')">
-        <div class="data-field-label">{label}</div>
-        <div class="data-field-value" title="{clean_val}">{clean_val}</div>
+        <div class="card-header-row">
+            <span class="data-field-label">{label}</span>
+            <span class="copy-icon">📋</span>
+        </div>
+        <div class="data-field-value">{clean_val}</div>
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
 
 # -----------------------------------------------------------------------------
-# 6. MAIN APP FLOW
+# 8. MAIN APPLICATION
 # -----------------------------------------------------------------------------
-
 def main():
-    # --- LOGIN SCREEN ---
+    # LOGIN
     if not st.session_state["auth"]:
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
-            st.markdown("## ⚡ Daisy Data Viewer")
+            st.title("🚗 Daisy Data")
             with st.form("login"):
                 email = st.text_input("Email")
                 password = st.text_input("Password", type="password")
@@ -309,164 +389,209 @@ def main():
                     try:
                         user = auth.sign_in_with_email_and_password(email, password)
                         acc = auth.get_account_info(user["idToken"])["users"][0]
-                        st.session_state["auth"] = {
-                            "uid": acc["localId"],
-                            "token": user["idToken"],
-                            "email": email
-                        }
+                        st.session_state["auth"] = {"uid": acc["localId"], "token": user["idToken"], "email": email}
                         st.rerun()
                     except Exception as e:
                         st.error(f"Login failed: {e}")
         return
 
-    # --- APP LOAD ---
+    # APP INIT
     uid = st.session_state["auth"]["uid"]
     token = st.session_state["auth"]["token"]
     
-    with st.spinner("Loading Data Engine..."):
-        cust_df_raw, notes_df, bookings_df = download_raw_data(uid, token)
-        
-        # Load remote migrations only once per session or on explicit refresh
-        if not st.session_state["local_migrations"]:
-            st.session_state["local_migrations"] = get_migration_status(uid, cust_df_raw["CustomerId"].unique())
-
-    # Merge migration status efficiently
-    # We create a working copy so we don't mutate the cached dataframe
-    df_display = cust_df_raw.copy()
+    # Load Data
+    cust_df, notes_df, bookings_df, load_time = load_and_clean_data(uid, token)
     
-    # Map local state onto the dataframe
-    # This is fast because it uses a dictionary lookup
-    df_display["Migrated"] = df_display["CustomerId"].map(st.session_state["local_migrations"]).fillna(False)
+    # Load Migrations (Once)
+    if st.session_state["local_migrations"] is None:
+        st.session_state["local_migrations"] = get_migration_status(uid)
 
-    # --- LAYOUT: SPLIT SCREEN ---
-    col_master, col_detail = st.columns([4, 6], gap="large")
+    # Merge Migration Status
+    cust_df["Migrated"] = cust_df["CustomerId"].map(st.session_state["local_migrations"]).fillna(False)
 
-    # --- LEFT COLUMN: MASTER LIST & SEARCH ---
-    with col_master:
-        st.markdown('<div class="master-header"><h3>👥 Customers</h3></div>', unsafe_allow_html=True)
+    # --- SIDEBAR ---
+    with st.sidebar:
+        st.header("🔍 Filters")
+        search_term = st.text_input("Search", placeholder="Name, Phone, ID...", label_visibility="collapsed")
         
-        # 1. Search & Filter
-        col_search, col_filter = st.columns([3, 1])
-        search_term = col_search.text_input("Search", placeholder="Name, Phone, Address...", label_visibility="collapsed")
-        show_migrated = col_filter.checkbox("Show Done", value=False, help="Show migrated customers")
-
-        # 2. Filtering Logic
-        mask = pd.Series(True, index=df_display.index)
+        st.subheader("Booking Filters")
+        filter_timeframe = st.radio("Show customers with bookings in:", 
+                                  ["Any Time", "Next 3 Months", "Next 6 Months", "Next 12 Months", "Future (All)"])
         
-        if not show_migrated:
-            mask &= ~df_display["Migrated"]
+        hide_migrated = st.checkbox("Hide Migrated", value=True)
+        
+        st.divider()
+        
+        # Debug / System Health
+        with st.expander("⚙️ System Health"):
+            st.metric("Load Time", f"{load_time:.2f}s")
+            st.text(f"Customers: {len(cust_df)}")
+            st.text(f"Bookings: {len(bookings_df)}")
+            st.text(f"Notes: {len(notes_df)}")
+            if st.button("🗑 Clear Cache"):
+                st.cache_data.clear()
+                st.rerun()
+
+    # --- FILTERING LOGIC ---
+    filtered_df = cust_df.copy()
+    
+    # 1. Migration Filter
+    if hide_migrated:
+        filtered_df = filtered_df[~filtered_df["Migrated"]]
+
+    # 2. Search Filter
+    if search_term:
+        s = search_term.lower()
+        search_series = (
+            filtered_df["DisplayName"].fillna("") + " " + 
+            filtered_df["Telephone"].fillna("") + " " + 
+            filtered_df["PhysicalAddress"].fillna("") + " " +
+            filtered_df["CustomerId"]
+        ).str.lower()
+        filtered_df = filtered_df[search_series.str.contains(s)]
+
+    # 3. Booking Timeframe Filter
+    if filter_timeframe != "Any Time" and not bookings_df.empty:
+        now = datetime.now()
+        future_bookings = bookings_df[bookings_df["StartDT"] >= now]
+        
+        if filter_timeframe == "Next 3 Months":
+            future_bookings = future_bookings[future_bookings["StartDT"] <= now + timedelta(days=90)]
+        elif filter_timeframe == "Next 6 Months":
+            future_bookings = future_bookings[future_bookings["StartDT"] <= now + timedelta(days=180)]
+        elif filter_timeframe == "Next 12 Months":
+            future_bookings = future_bookings[future_bookings["StartDT"] <= now + timedelta(days=365)]
             
-        if search_term:
-            s = search_term.lower()
-            # Create a searchable string for speed
-            search_series = (
-                df_display["DisplayName"].fillna("") + " " + 
-                df_display["Telephone"].fillna("") + " " + 
-                df_display["PhysicalAddress"].fillna("")
-            ).str.lower()
-            mask &= search_series.str.contains(s)
+        valid_cids = future_bookings["CustomerId"].unique()
+        filtered_df = filtered_df[filtered_df["CustomerId"].isin(valid_cids)]
 
-        filtered_df = df_display[mask].copy()
+    # --- MAIN LAYOUT ---
+    col_list, col_detail = st.columns([4, 6], gap="large")
+
+    # --- LEFT: CUSTOMER LIST ---
+    with col_list:
+        st.markdown(f'<div class="master-header"><h3>👥 Customers ({len(filtered_df)})</h3></div>', unsafe_allow_html=True)
         
-        # 3. Display List (Using st.dataframe selection for speed)
-        st.caption(f"Showing {len(filtered_df)} customers")
+        # Simplified table for speed
+        table_df = filtered_df[["Migrated", "DisplayName", "Telephone", "CustomerId"]].copy()
+        table_df["Status"] = table_df["Migrated"].apply(lambda x: "✅" if x else "⚡")
         
-        # Prepare table for display (hide internal IDs)
-        table_df = filtered_df[["DisplayName", "Telephone", "Migrated"]]
-        table_df.insert(0, "Status", table_df["Migrated"].apply(lambda x: "✅" if x else "⚡"))
-        
-        selection = st.dataframe(
+        event = st.dataframe(
             table_df[["Status", "DisplayName", "Telephone"]],
             use_container_width=True,
             hide_index=True,
-            height=600,
+            height=700,
             on_select="rerun",
             selection_mode="single-row",
             column_config={
-                "Status": st.column_config.TextColumn("St", width="small"),
-                "DisplayName": st.column_config.TextColumn("Name", width="large"),
-                "Telephone": st.column_config.TextColumn("Phone", width="medium"),
+                "Status": st.column_config.TextColumn("", width="small"),
+                "DisplayName": st.column_config.TextColumn("Customer", width="large"),
             }
         )
 
-        # Handle Selection
-        if selection.selection.rows:
-            selected_index = selection.selection.rows[0]
-            # Map back to original dataframe using the index
-            selected_row = filtered_df.iloc[selected_index]
-            st.session_state["selected_customer_id"] = selected_row["CustomerId"]
+        selected_cid = None
+        if event.selection.rows:
+            idx = event.selection.rows[0]
+            selected_cid = filtered_df.iloc[idx]["CustomerId"]
 
-    # --- RIGHT COLUMN: DETAIL WORKSPACE ---
+    # --- RIGHT: DETAIL WORKSPACE ---
     with col_detail:
-        if st.session_state["selected_customer_id"]:
-            # Get full customer object
-            cust = df_display[df_display["CustomerId"] == st.session_state["selected_customer_id"]].iloc[0]
-            cid = cust["CustomerId"]
-            is_migrated = cust["Migrated"]
+        if selected_cid:
+            # Get Data
+            cust = cust_df[cust_df["CustomerId"] == selected_cid].iloc[0]
+            c_notes = notes_df[notes_df["CustomerId"] == selected_cid] if notes_df is not None else pd.DataFrame()
+            c_bookings = bookings_df[bookings_df["CustomerId"] == selected_cid] if bookings_df is not None else pd.DataFrame()
 
-            # HEADER
-            h1, h2 = st.columns([3, 1])
-            with h1:
-                st.markdown(f"## {cust['DisplayName']}")
-                st.caption(f"ID: {cid}")
-            with h2:
-                if is_migrated:
-                    if st.button("↩ Undo", use_container_width=True):
-                        update_migration(uid, cid, False)
+            # Header
+            c1, c2 = st.columns([0.7, 0.3])
+            with c1:
+                st.title(cust["DisplayName"])
+                st.caption(f"ID: {selected_cid}")
+            with c2:
+                # View Toggle
+                mode = st.radio("View Mode", ["Cleansed", "Original"], horizontal=True, label_visibility="collapsed")
+                is_clean = (mode == "Cleansed")
+                
+                # Migration Button
+                if cust["Migrated"]:
+                    if st.button("↩ Undo Migration", use_container_width=True):
+                        st.session_state["local_migrations"][selected_cid] = False
+                        if db: db.collection("migrations").document(uid).collection("customers").document(selected_cid).set({"migrated": False}, merge=True)
                         st.rerun()
                 else:
-                    if st.button("✅ Complete", type="primary", use_container_width=True):
-                        update_migration(uid, cid, True)
+                    if st.button("✅ Mark Migrated", type="primary", use_container_width=True):
+                        st.session_state["local_migrations"][selected_cid] = True
+                        if db: db.collection("migrations").document(uid).collection("customers").document(selected_cid).set({"migrated": True}, merge=True)
                         st.rerun()
 
             st.divider()
 
-            # DATA CARDS GRID
-            st.markdown("#### 📋 Client Details")
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                render_copy_field("Full Name", cust.get("CustomerName"))
-                render_copy_field("Company", cust.get("CompanyName"))
-                render_copy_field("Email", cust.get("Email"))
-                render_copy_field("DOB", cust.get("DateOfBirth"))
-            with c2:
-                render_copy_field("Mobile", cust.get("SMS"))
-                render_copy_field("Telephone", cust.get("Telephone"))
-                render_copy_field("Address", cust.get("PhysicalAddress"))
-                render_copy_field("Gender", cust.get("Gender"))
+            # Data Fields
+            cols = st.columns(2)
+            with cols[0]:
+                render_copy_card("First Name", cust.get("CleanFirstName") if is_clean else "")
+                render_copy_card("Last Name", cust.get("CleanLastName") if is_clean else "")
+                render_copy_card("Full Name", cust.get("DisplayName") if is_clean else cust.get("CustomerName"))
+                render_copy_card("Email", cust.get("Email"))
+            with cols[1]:
+                render_copy_card("Mobile", cust.get("SMS"))
+                render_copy_card("Telephone", cust.get("Telephone"))
+                addr_val = cust.get("PhysicalAddress")
+                render_copy_card("Address", addr_val)
+                
+                # Address Validation Logic
+                if addr_val and "GOOGLE" in st.secrets:
+                    cache_mgr = AddressCacheManager(db)
+                    geocoder = CachedGeocoder(st.secrets["GOOGLE"]["geocoding_api_key"], cache_mgr)
+                    
+                    cached_geo = cache_mgr.get_cached_geocoding(addr_val)
+                    
+                    if cached_geo:
+                        if cached_geo.get('valid'):
+                            st.success(f"📍 {cached_geo.get('formatted_address')}")
+                        else:
+                            st.error("Address Invalid")
+                    else:
+                        if st.button("Verify Address"):
+                            with st.spinner("Checking Google Maps..."):
+                                res = geocoder.geocode(addr_val)
+                                st.rerun()
 
-            # NOTES TAB
-            st.markdown("#### 📝 Notes & History")
+            # Tabs for Notes & Bookings
+            st.markdown("### History")
+            tab1, tab2 = st.tabs([f"Bookings ({len(c_bookings)})", f"Notes ({len(c_notes)})"])
             
-            cust_notes = notes_df[notes_df["CustomerId"] == cid]
-            cust_bookings = bookings_df[bookings_df["CustomerId"] == cid]
-            
-            tab_notes, tab_bookings = st.tabs([f"Notes ({len(cust_notes)})", f"Bookings ({len(cust_bookings)})"])
-            
-            with tab_notes:
-                if not cust_notes.empty:
-                    for _, note in cust_notes.iterrows():
-                        st.info(note["NoteText"])
+            with tab1:
+                if not c_bookings.empty:
+                    # Sort by date desc
+                    c_bookings = c_bookings.sort_values("StartDT", ascending=False)
+                    
+                    for _, row in c_bookings.iterrows():
+                        dt_str = row["StartDT"].strftime("%d %b %Y %H:%M") if pd.notna(row["StartDT"]) else "No Date"
+                        
+                        if is_clean and "CleanFrom" in row:
+                            # Clean Card View
+                            with st.container(border=True):
+                                st.markdown(f"**{dt_str}**")
+                                cA, cB = st.columns(2)
+                                cA.markdown(f"**From:** {row['CleanFrom']}")
+                                cB.markdown(f"**To:** {row['CleanTo']}")
+                        else:
+                            # Raw View
+                            st.text(f"{dt_str} - {row.get('Notes', '')}")
                 else:
-                    st.caption("No notes found.")
+                    st.info("No bookings found for this customer.")
 
-            with tab_bookings:
-                if not cust_bookings.empty:
-                    st.dataframe(
-                        cust_bookings, 
-                        use_container_width=True,
-                        hide_index=True
-                    )
+            with tab2:
+                if not c_notes.empty:
+                    for _, row in c_notes.iterrows():
+                        st.info(row["NoteText"])
                 else:
-                    st.caption("No bookings found.")
-
+                    st.caption("No notes.")
         else:
-            # Empty State
             st.markdown("""
-                <div style='text-align: center; padding: 5rem; color: #888;'>
+                <div style='text-align: center; margin-top: 100px; color: #aaa;'>
                     <h3>👈 Select a customer</h3>
-                    <p>Choose a customer from the list to view details, copy data, and manage migration status.</p>
                 </div>
             """, unsafe_allow_html=True)
 
