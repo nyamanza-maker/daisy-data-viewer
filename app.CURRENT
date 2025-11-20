@@ -170,23 +170,26 @@ def init_admin_db():
         return None
 
 db = init_admin_db()
-#----GEOCODING COMPONENTS
+
+# ----------------------------------
+# Geocoding Components
+# ----------------------------------
 def get_geocoding_components():
     """Initialize geocoding components"""
     if db is None:
         return None, None, None, None
     
-    api_key = st.secrets.get("GOOGLE", {}).get("geocoding_api_key")
-    if not api_key:
+    if "GOOGLE" not in st.secrets or "geocoding_api_key" not in st.secrets["GOOGLE"]:
         return None, None, None, None
     
+    api_key = st.secrets["GOOGLE"]["geocoding_api_key"]
     cache_mgr = AddressCacheManager(db)
     geocoder = CachedGeocoder(api_key, cache_mgr, rate_limit=50)
     customer_proc = CustomerProcessor(geocoder, cache_mgr)
     booking_proc = BookingProcessor(geocoder, cache_mgr)
     
     return cache_mgr, geocoder, customer_proc, booking_proc
-#----END GEOCODING COMPONENTS
+
 # ----------------------------------
 # Helper Functions
 # ----------------------------------
@@ -389,7 +392,7 @@ if "lockout_until" not in st.session_state:
 if "search_history" not in st.session_state:
     st.session_state["search_history"] = []
 if "view_mode" not in st.session_state:
-    st.session_state["view_mode"] = "cleansed"  # "original" or "cleansed"
+    st.session_state["view_mode"] = "cleansed"
 
 # ----------------------------------
 # Authentication UI
@@ -504,6 +507,65 @@ with st.sidebar:
         col1.metric("Customers", "✓" if has_customers else "✗")
         col2.metric("Notes", "✓" if has_notes else "✗")
         col3.metric("Bookings", "✓" if has_bookings else "✗")
+
+# ----------------------------------
+# Address Validation Section (NEW)
+# ----------------------------------
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("#### 🌍 Address Validation")
+    
+    cache_mgr, geocoder, customer_proc, booking_proc = get_geocoding_components()
+    
+    if cache_mgr:
+        # Show cache stats
+        stats = cache_mgr.get_cache_stats()
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Cached", stats.get("total_addresses", 0))
+        col2.metric("Valid", stats.get("valid", 0))
+        col3.metric("Invalid", stats.get("invalid", 0))
+        
+        if stats.get("deduplication_rate", 0) > 0:
+            st.caption(f"💾 {stats.get('deduplication_rate', 0)}% cache savings")
+        
+        # Process customers button
+        if st.button("🚀 Validate Customer Addresses", use_container_width=True, key="validate_customers"):
+            progress_placeholder = st.empty()
+            status_placeholder = st.empty()
+            
+            def progress_callback(msg):
+                progress_placeholder.info(msg)
+            
+            with st.spinner("Processing customer addresses..."):
+                try:
+                    # Reload customers fresh
+                    if file_exists(uid, "Customers.csv", id_token):
+                        customers_to_process = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
+                        
+                        processed_customers = customer_proc.process_customers(
+                            customers_to_process,
+                            uid,
+                            progress_callback
+                        )
+                        
+                        final_stats = geocoder.get_stats()
+                        status_placeholder.success(
+                            f"✅ Processed {len(processed_customers):,} customers | "
+                            f"API calls: {final_stats['api_requests']} | "
+                            f"Cache hits: {final_stats['cache_hits']:,} | "
+                            f"Cost: ${final_stats['estimated_cost']}"
+                        )
+                        
+                        st.info("💡 Geocoding complete! Addresses cached in Firestore.")
+                        
+                except Exception as e:
+                    status_placeholder.error(f"Error: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    else:
+        st.warning("⚠️ Geocoding not configured")
+        st.caption("Add Google API key to secrets to enable address validation")
 
 # ----------------------------------
 # Load Data
@@ -741,6 +803,70 @@ for label, value in fields.items():
         col2.markdown(f"<span class='{strike}'>{value}</span>", unsafe_allow_html=True)
 
 st.markdown("</div>", unsafe_allow_html=True)
+
+# ----------------------------------
+# Validated Address Display (NEW)
+# ----------------------------------
+if "PhysicalAddress" in selected_customer and pd.notna(selected_customer["PhysicalAddress"]):
+    address = str(selected_customer["PhysicalAddress"]).strip()
+    
+    # Check if we have geocoding data from cache
+    cache_mgr, geocoder, _, _ = get_geocoding_components()
+    
+    if cache_mgr and address:
+        cached_result = cache_mgr.get_cached_geocoding(address)
+        
+        if cached_result:
+            st.markdown("---")
+            st.markdown("### 📍 Validated Address")
+            
+            col1, col2 = st.columns([0.75, 0.25])
+            
+            with col1:
+                is_valid = cached_result.get("valid", False)
+                is_partial = cached_result.get("partial_match", False)
+                
+                if is_valid and not is_partial:
+                    st.success(f"✓ {cached_result.get('formatted_address', '')}")
+                elif is_valid and is_partial:
+                    st.warning(f"⚠️ Partial match: {cached_result.get('formatted_address', '')}")
+                else:
+                    st.error(f"❌ Could not validate: {address}")
+                
+                # Show address components
+                if is_valid:
+                    components = []
+                    if cached_result.get("suburb"):
+                        components.append(cached_result["suburb"])
+                    if cached_result.get("state"):
+                        components.append(cached_result["state"])
+                    if cached_result.get("postcode"):
+                        components.append(cached_result["postcode"])
+                    
+                    if components:
+                        st.caption(f"📮 {', '.join(str(c) for c in components)}")
+                    
+                    # Show coordinates
+                    if cached_result.get("lat") and cached_result.get("lng"):
+                        st.caption(f"🗺️ {cached_result['lat']}, {cached_result['lng']}")
+            
+            with col2:
+                if st.button("🔄 Recheck", key=f"recheck_{customer_id}"):
+                    if geocoder:
+                        with st.spinner("Rechecking address..."):
+                            result = geocoder.geocode(address, uid, force_recheck=True)
+                            
+                            if result:
+                                st.success("✓ Address rechecked!")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("Failed to recheck address")
+                    else:
+                        st.error("Geocoding not available")
+        else:
+            # Address not yet geocoded
+            st.info("💡 Address not yet validated. Click 'Validate Customer Addresses' in the sidebar to geocode all addresses.")
 
 # ----------------------------------
 # Notes Section

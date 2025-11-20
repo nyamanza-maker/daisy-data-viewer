@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 import requests
+import html
 
 import pyrebase
 import firebase_admin
@@ -170,23 +171,26 @@ def init_admin_db():
         return None
 
 db = init_admin_db()
-#----GEOCODING COMPONENTS
+
+# ----------------------------------
+# Geocoding Components
+# ----------------------------------
 def get_geocoding_components():
     """Initialize geocoding components"""
     if db is None:
         return None, None, None, None
     
-    api_key = st.secrets.get("GOOGLE", {}).get("geocoding_api_key")
-    if not api_key:
+    if "GOOGLE" not in st.secrets or "geocoding_api_key" not in st.secrets["GOOGLE"]:
         return None, None, None, None
     
+    api_key = st.secrets["GOOGLE"]["geocoding_api_key"]
     cache_mgr = AddressCacheManager(db)
     geocoder = CachedGeocoder(api_key, cache_mgr, rate_limit=50)
     customer_proc = CustomerProcessor(geocoder, cache_mgr)
     booking_proc = BookingProcessor(geocoder, cache_mgr)
     
     return cache_mgr, geocoder, customer_proc, booking_proc
-#----END GEOCODING COMPONENTS
+
 # ----------------------------------
 # Helper Functions
 # ----------------------------------
@@ -377,6 +381,22 @@ def extract_booking_addresses(notes_text: str) -> Dict[str, str]:
         "notes": remaining
     }
 
+def clean_note_text(note_text: str) -> str:
+    """Lightweight cleansing for free‑text notes.
+    - Normalize whitespace and newlines
+    - Remove BOM/non‑breaking spaces
+    - Collapse decorative asterisks
+    """
+    if pd.isna(note_text):
+        return ""
+    t = str(note_text)
+    t = t.replace("\ufeff", "").replace("\u00a0", " ")
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = "\n".join(line.strip() for line in t.split("\n"))
+    t = re.sub(r"[ \t]+", " ", t)
+    t = re.sub(r"\*{2,}", "*", t)
+    return t.strip()
+
 # ----------------------------------
 # Session State Initialization
 # ----------------------------------
@@ -389,7 +409,7 @@ if "lockout_until" not in st.session_state:
 if "search_history" not in st.session_state:
     st.session_state["search_history"] = []
 if "view_mode" not in st.session_state:
-    st.session_state["view_mode"] = "cleansed"  # "original" or "cleansed"
+    st.session_state["view_mode"] = "cleansed"
 
 # ----------------------------------
 # Authentication UI
@@ -506,6 +526,65 @@ with st.sidebar:
         col3.metric("Bookings", "✓" if has_bookings else "✗")
 
 # ----------------------------------
+# Address Validation Section (NEW)
+# ----------------------------------
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("#### 🌍 Address Validation")
+    
+    cache_mgr, geocoder, customer_proc, booking_proc = get_geocoding_components()
+    
+    if cache_mgr:
+        # Show cache stats
+        stats = cache_mgr.get_cache_stats()
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Cached", stats.get("total_addresses", 0))
+        col2.metric("Valid", stats.get("valid", 0))
+        col3.metric("Invalid", stats.get("invalid", 0))
+        
+        if stats.get("deduplication_rate", 0) > 0:
+            st.caption(f"💾 {stats.get('deduplication_rate', 0)}% cache savings")
+        
+        # Process customers button
+        if st.button("🚀 Validate Customer Addresses", use_container_width=True, key="validate_customers"):
+            progress_placeholder = st.empty()
+            status_placeholder = st.empty()
+            
+            def progress_callback(msg):
+                progress_placeholder.info(msg)
+            
+            with st.spinner("Processing customer addresses..."):
+                try:
+                    # Reload customers fresh
+                    if file_exists(uid, "Customers.csv", id_token):
+                        customers_to_process = download_csv_as_df(uid, "Customers.csv", id_token, low_memory=False)
+                        
+                        processed_customers = customer_proc.process_customers(
+                            customers_to_process,
+                            uid,
+                            progress_callback
+                        )
+                        
+                        final_stats = geocoder.get_stats()
+                        status_placeholder.success(
+                            f"✅ Processed {len(processed_customers):,} customers | "
+                            f"API calls: {final_stats['api_requests']} | "
+                            f"Cache hits: {final_stats['cache_hits']:,} | "
+                            f"Cost: ${final_stats['estimated_cost']}"
+                        )
+                        
+                        st.info("💡 Geocoding complete! Addresses cached in Firestore.")
+                        
+                except Exception as e:
+                    status_placeholder.error(f"Error: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+    else:
+        st.warning("⚠️ Geocoding not configured")
+        st.caption("Add Google API key to secrets to enable address validation")
+
+# ----------------------------------
 # Load Data
 # ----------------------------------
 @st.cache_data(ttl=300)
@@ -598,39 +677,30 @@ st.markdown("---")
 # ----------------------------------
 # Search & Filters
 # ----------------------------------
-col1, col2 = st.columns([3, 1])
+if "current_search" not in st.session_state:
+    st.session_state["current_search"] = ""
 
-with col1:
-    if "current_search" not in st.session_state:
-        st.session_state["current_search"] = ""
-    
-    search_query = st.text_input(
-        "🔍 Search customers by name, company, or phone",
-        value=st.session_state["current_search"],
-        key="search_input",
-        placeholder="Type to search..."
-    )
-    
-    if search_query != st.session_state["current_search"]:
-        st.session_state["current_search"] = search_query
+search_query = st.sidebar.text_input(
+    "Search customers by name, company, or phone",
+    value=st.session_state["current_search"],
+    key="sidebar_search_input",
+    placeholder="Type to search..."
+)
 
-with col2:
-    view_mode = st.radio(
-        "Data View",
-        ["Cleansed", "Original"],
-        horizontal=True,
-        key="view_mode_radio"
-    )
-    st.session_state["view_mode"] = view_mode.lower()
+if search_query != st.session_state["current_search"]:
+    st.session_state["current_search"] = search_query
 
-# Filters
-col1, col2, col3 = st.columns(3)
-with col1:
-    exclude_migrated = st.checkbox("Hide migrated customers", value=True)
-with col2:
-    future_only = st.checkbox("Only with future bookings", value=False)
-with col3:
-    max_results = st.number_input("Max results", 25, 5000, 200, 25)
+# Filters (Sidebar)
+exclude_migrated = st.sidebar.checkbox("Hide migrated customers", value=True)
+future_only = st.sidebar.checkbox("Only with future bookings", value=False)
+max_results = st.sidebar.number_input("Max results", 25, 5000, 200, 25)
+
+# Cleanup legacy widget state if present
+if "search_input" in st.session_state:
+    try:
+        del st.session_state["search_input"]
+    except Exception:
+        pass
 
 # Apply filters
 if "CustomerName" in customers.columns:
@@ -700,16 +770,29 @@ else:
         st.cache_data.clear()
         st.rerun()
 
+# Customer section view toggle + header on one row
+cust_head_left, cust_head_right = st.columns([0.8, 0.2])
+with cust_head_right:
+    cust_cleansed = st.checkbox(
+        "Cleansed view",
+        value=st.session_state.get("view_mode_customer", True),
+        key="view_toggle_customer",
+    )
+st.session_state["view_mode_customer"] = bool(cust_cleansed)
+cust_view_is_cleansed = bool(cust_cleansed)
+badge_class = "badge-clean" if cust_view_is_cleansed else "badge-original"
+badge_text = "CLEANSED" if cust_view_is_cleansed else "ORIGINAL"
+with cust_head_left:
+    st.markdown(
+        f"### Customer Information <span class='data-badge {badge_class}'>{badge_text}</span>",
+        unsafe_allow_html=True,
+    )
+
+# Now start the section card for customer fields
 st.markdown("<div class='section-card'>", unsafe_allow_html=True)
 
-view_is_cleansed = st.session_state["view_mode"] == "cleansed"
-badge_class = "badge-clean" if view_is_cleansed else "badge-original"
-badge_text = "CLEANSED" if view_is_cleansed else "ORIGINAL"
-
-st.markdown(f"### Customer Information <span class='data-badge {badge_class}'>{badge_text}</span>", unsafe_allow_html=True)
-
 # Display customer fields
-if view_is_cleansed:
+if cust_view_is_cleansed:
     fields = {
         "First Name": selected_customer.get("CleanFirstName", ""),
         "Last Name": selected_customer.get("CleanLastName", ""),
@@ -743,9 +826,83 @@ for label, value in fields.items():
 st.markdown("</div>", unsafe_allow_html=True)
 
 # ----------------------------------
+# Validated Address Display (NEW)
+# ----------------------------------
+if "PhysicalAddress" in selected_customer and pd.notna(selected_customer["PhysicalAddress"]):
+    address = str(selected_customer["PhysicalAddress"]).strip()
+    
+    # Check if we have geocoding data from cache
+    cache_mgr, geocoder, _, _ = get_geocoding_components()
+    
+    if cache_mgr and address:
+        cached_result = cache_mgr.get_cached_geocoding(address)
+        
+        if cached_result:
+            st.markdown("---")
+            st.markdown("### 📍 Validated Address")
+            
+            col1, col2 = st.columns([0.75, 0.25])
+            
+            with col1:
+                is_valid = cached_result.get("valid", False)
+                is_partial = cached_result.get("partial_match", False)
+                
+                if is_valid and not is_partial:
+                    st.success(f"✓ {cached_result.get('formatted_address', '')}")
+                elif is_valid and is_partial:
+                    st.warning(f"⚠️ Partial match: {cached_result.get('formatted_address', '')}")
+                else:
+                    st.error(f"❌ Could not validate: {address}")
+                
+                # Show address components
+                if is_valid:
+                    components = []
+                    if cached_result.get("suburb"):
+                        components.append(cached_result["suburb"])
+                    if cached_result.get("state"):
+                        components.append(cached_result["state"])
+                    if cached_result.get("postcode"):
+                        components.append(cached_result["postcode"])
+                    
+                    if components:
+                        st.caption(f"📮 {', '.join(str(c) for c in components)}")
+                    
+                    # Show coordinates
+                    if cached_result.get("lat") and cached_result.get("lng"):
+                        st.caption(f"🗺️ {cached_result['lat']}, {cached_result['lng']}")
+            
+            with col2:
+                if st.button("🔄 Recheck", key=f"recheck_{customer_id}"):
+                    if geocoder:
+                        with st.spinner("Rechecking address..."):
+                            result = geocoder.geocode(address, uid, force_recheck=True)
+                            
+                            if result:
+                                st.success("✓ Address rechecked!")
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("Failed to recheck address")
+                    else:
+                        st.error("Geocoding not available")
+        else:
+            # Address not yet geocoded
+            st.info("💡 Address not yet validated. Click 'Validate Customer Addresses' in the sidebar to geocode all addresses.")
+
+# ----------------------------------
 # Notes Section
 # ----------------------------------
 st.markdown("### 📝 Customer Notes")
+
+# Notes section view toggle (right-aligned, UI only)
+notes_head_left, notes_head_right = st.columns([0.8, 0.2])
+with notes_head_right:
+    notes_cleansed = st.checkbox(
+        "Cleansed view",
+        value=st.session_state.get("view_mode_notes", True),
+        key="view_toggle_notes",
+    )
+st.session_state["view_mode_notes"] = bool(notes_cleansed)
 
 customer_notes = notes[notes["CustomerId"] == customer_id] if "CustomerId" in notes.columns else pd.DataFrame()
 
@@ -753,6 +910,9 @@ if customer_notes.empty:
     st.info("No notes for this customer")
 else:
     st.markdown("<div class='section-card'>", unsafe_allow_html=True)
+    # Notes view badge for cleansed/original
+    notes_view_is_cleansed = bool(st.session_state.get("view_mode_notes", True))
+    # Badge is implicit via the right-aligned toggle; remove extra box
     
     for idx, note in customer_notes.iterrows():
         is_note_migrated = to_bool(note.get("Migrated", False))
@@ -764,7 +924,16 @@ else:
             if note_date:
                 st.markdown(f"**{note_date}**")
             strike = "text-decoration: line-through;" if is_note_migrated else ""
-            st.markdown(f"<div style='{strike}'>{note_text}</div>", unsafe_allow_html=True)
+            # Choose cleansed or original text
+            if notes_view_is_cleansed:
+                display_text = note.get("CleanNoteText") or clean_note_text(note_text)
+            else:
+                display_text = str(note_text or "")
+            st.markdown(
+                f"<div style='{strike}'><pre style='white-space: pre-wrap; margin: 0;'>" +
+                f"{html.escape(display_text)}</pre></div>",
+                unsafe_allow_html=True,
+            )
         
         with col2:
             if is_note_migrated:
@@ -789,8 +958,8 @@ customer_bookings = bookings[bookings["CustomerId"] == customer_id].copy() if "C
 if customer_bookings.empty:
     st.info("No bookings for this customer")
 else:
-    # Booking filters
-    col1, col2 = st.columns([0.7, 0.3])
+    # Booking filters + view toggle
+    col1, col2, col3 = st.columns([0.6, 0.2, 0.2])
     
     with col1:
         booking_filter = st.radio(
@@ -802,6 +971,13 @@ else:
     
     with col2:
         hide_migrated_bookings = st.checkbox("Hide migrated", value=False, key="hide_migrated")
+    with col3:
+        book_cleansed = st.checkbox(
+            "Cleansed view",
+            value=st.session_state.get("view_mode_bookings", True),
+            key="view_toggle_bookings",
+        )
+        st.session_state["view_mode_bookings"] = bool(book_cleansed)
     
     # Parse dates
     if "StartDateTime" in customer_bookings.columns:
@@ -889,14 +1065,35 @@ else:
             </div>
         """, unsafe_allow_html=True)
         
+        # Per-booking view toggle placed inside card header row
+        _left, _right = st.columns([0.85, 0.15])
+        with _left:
+            header_text = f"**{staff}** | {service} | {start_date} {start_time} → {end_date} {end_time}"
+            if is_migrated:
+                st.markdown(f"<div style='{strike}'>{header_text}</div>", unsafe_allow_html=True)
+            else:
+                st.markdown(header_text)
+        with _right:
+            _default = bool(st.session_state.get("view_mode_bookings", True))
+            _toggle_key = f"view_mode_booking_{booking_id or idx}"
+            _val = st.checkbox(
+                "Cleansed view",
+                value=bool(st.session_state.get(_toggle_key, _default)),
+                key=f"toggle_{booking_id or idx}",
+            )
+            st.session_state[_toggle_key] = bool(_val)
+
         st.markdown("</div>", unsafe_allow_html=True)
         
         # Booking details in expandable section
         with st.expander("View booking details", expanded=False):
             st.markdown("<div class='section-card'>", unsafe_allow_html=True)
             
-            # Show cleansed or original based on view mode
-            if view_is_cleansed:
+            # Show cleansed or original based on per-booking toggle
+            default_book_view = bool(st.session_state.get("view_mode_bookings", True))
+            booking_key = f"view_mode_booking_{booking_id or idx}"
+            booking_view_is_cleansed = bool(st.session_state.get(booking_key, default_book_view))
+            if booking_view_is_cleansed:
                 fields = {
                     "Service": booking.get("Service", ""),
                     "Staff": booking.get("Staff", ""),
