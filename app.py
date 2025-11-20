@@ -228,4 +228,269 @@ def load_data(uid, _auth_instance, _storage_instance):
 
     # Defaults
     if cust is None: cust = pd.DataFrame(columns=["CustomerId", "CustomerName"])
-    if bookings is None: bookings = pd
+    if bookings is None: bookings = pd.DataFrame(columns=["BookingId", "CustomerId", "StartDateTime"])
+    if notes is None: notes = pd.DataFrame(columns=["CustomerId", "NoteText"])
+
+    # Type conversion for IDs
+    for df in [cust, notes, bookings]:
+        if not df.empty and "CustomerId" in df.columns:
+            df["CustomerId"] = df["CustomerId"].astype(str).str.split('.').str[0]
+
+    # Cleansing
+    if "CustomerName" in cust.columns:
+        cust["DisplayName"] = cust["CustomerName"].fillna(cust.get("CompanyName", "Unknown"))
+        names = cust["DisplayName"].apply(clean_customer_name)
+        cust["CleanFirstName"] = names.apply(lambda x: x[0])
+        cust["CleanLastName"] = names.apply(lambda x: x[1])
+
+    if not bookings.empty:
+        bookings["StartDT"] = pd.to_datetime(bookings["StartDateTime"], errors='coerce')
+        if "Notes" in bookings.columns:
+            extracted = bookings["Notes"].apply(extract_booking_notes)
+            bookings["CleanFrom"] = extracted.apply(lambda x: x["from"])
+            bookings["CleanTo"] = extracted.apply(lambda x: x["to"])
+            bookings["CleanNotes"] = extracted.apply(lambda x: x["notes"])
+
+    return cust, notes, bookings
+
+def get_migrations(uid, db):
+    if not db: return {}
+    try:
+        docs = db.collection("migrations").document(uid).collection("customers").stream()
+        return {d.id: True for d in docs if d.to_dict().get("migrated")}
+    except:
+        return {}
+
+# -----------------------------------------------------------------------------
+# 6. UI RENDERERS
+# -----------------------------------------------------------------------------
+def render_field(label, value):
+    if pd.isna(value) or str(value).strip() == "": return
+    clean_val = str(value).strip()
+    safe_val = clean_val.replace("'", "\\'").replace('"', '&quot;')
+    st.markdown(f"""
+    <div class="data-field-card" onclick="copyToClipboard('{safe_val}')">
+        <div class="data-field-label">{label} <span>📋</span></div>
+        <div class="data-field-value">{clean_val}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# 7. MAIN APP
+# -----------------------------------------------------------------------------
+def main():
+    # Initialize Firebase SAFELY inside main
+    firebase_app, db = get_firebase_app()
+    auth = firebase_app.auth()
+    
+    # Session State
+    if "auth" not in st.session_state: st.session_state["auth"] = None
+    if "migrations" not in st.session_state: st.session_state["migrations"] = None
+
+    # --- LOGIN SCREEN ---
+    if not st.session_state["auth"]:
+        c1, c2, c3 = st.columns([1,2,1])
+        with c2:
+            st.title("Daisy Data Viewer 🚗")
+            with st.form("login_form"):
+                email = st.text_input("Email")
+                password = st.text_input("Password", type="password")
+                submitted = st.form_submit_button("Login", use_container_width=True)
+                
+                if submitted:
+                    try:
+                        user = auth.sign_in_with_email_and_password(email, password)
+                        # Get User Info
+                        acc = auth.get_account_info(user["idToken"])["users"][0]
+                        st.session_state["auth"] = {
+                            "uid": acc["localId"], 
+                            "token": user["idToken"], 
+                            "email": email
+                        }
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Login failed: {e}")
+        return
+
+    # --- APP LOAD ---
+    uid = st.session_state["auth"]["uid"]
+    
+    with st.spinner("Loading franchise data..."):
+        cust_df, notes_df, bookings_df = load_data(uid, auth, firebase_app.storage())
+        
+        if st.session_state["migrations"] is None:
+            st.session_state["migrations"] = get_migrations(uid, db)
+
+    # Apply Migrations
+    cust_df["Migrated"] = cust_df["CustomerId"].map(st.session_state["migrations"]).fillna(False)
+
+    # --- SIDEBAR & FILTERS ---
+    with st.sidebar:
+        st.header("🔍 Filters")
+        search = st.text_input("Search", placeholder="Name, Phone, ID...")
+        
+        st.subheader("Bookings")
+        time_filter = st.radio("Timeframe", ["All Future", "Next 3 Months", "Next 6 Months", "Next 12 Months", "Any Time"])
+        
+        hide_migrated = st.checkbox("Hide Migrated Customers", value=True)
+        
+        st.divider()
+        if st.button("Refresh Data"):
+            st.cache_data.clear()
+            st.rerun()
+            
+    # --- FILTERING LOGIC ---
+    filtered = cust_df.copy()
+    
+    # 1. Migrated
+    if hide_migrated:
+        filtered = filtered[~filtered["Migrated"]]
+        
+    # 2. Search
+    if search:
+        s = search.lower()
+        # Fast concat search
+        corpus = (
+            filtered["DisplayName"].fillna("") + " " + 
+            filtered["Telephone"].fillna("") + " " + 
+            filtered["PhysicalAddress"].fillna("")
+        ).str.lower()
+        filtered = filtered[corpus.str.contains(s)]
+        
+    # 3. Timeframe (The complicated one)
+    if not bookings_df.empty:
+        now = datetime.now()
+        # Get list of customers with valid bookings based on timeframe
+        valid_bookings = bookings_df.copy()
+        
+        if time_filter != "Any Time":
+            valid_bookings = valid_bookings[valid_bookings["StartDT"] >= now]
+            
+            if time_filter == "Next 3 Months":
+                valid_bookings = valid_bookings[valid_bookings["StartDT"] <= now + timedelta(days=90)]
+            elif time_filter == "Next 6 Months":
+                valid_bookings = valid_bookings[valid_bookings["StartDT"] <= now + timedelta(days=180)]
+            elif time_filter == "Next 12 Months":
+                valid_bookings = valid_bookings[valid_bookings["StartDT"] <= now + timedelta(days=365)]
+        
+        # If filtering by time, restrict customers
+        if time_filter != "Any Time":
+            valid_cids = valid_bookings["CustomerId"].unique()
+            filtered = filtered[filtered["CustomerId"].isin(valid_cids)]
+
+    # --- MAIN UI ---
+    c_list, c_detail = st.columns([4, 6], gap="medium")
+    
+    # LEFT: List
+    with c_list:
+        st.markdown(f"### Customers ({len(filtered)})")
+        
+        # Prepare display table
+        display_tbl = filtered[["Migrated", "DisplayName", "Telephone", "CustomerId"]].copy()
+        display_tbl["Status"] = display_tbl["Migrated"].apply(lambda x: "✅" if x else "⚡")
+        
+        selection = st.dataframe(
+            display_tbl[["Status", "DisplayName", "Telephone"]],
+            use_container_width=True,
+            hide_index=True,
+            height=700,
+            on_select="rerun",
+            selection_mode="single-row",
+            column_config={
+                "Status": st.column_config.TextColumn("", width="small"),
+                "DisplayName": st.column_config.TextColumn("Name", width="large")
+            }
+        )
+        
+        selected_id = None
+        if selection.selection.rows:
+            idx = selection.selection.rows[0]
+            selected_id = filtered.iloc[idx]["CustomerId"]
+            
+    # RIGHT: Details
+    with c_detail:
+        if selected_id:
+            cust = cust_df[cust_df["CustomerId"] == selected_id].iloc[0]
+            c_bookings = bookings_df[bookings_df["CustomerId"] == selected_id]
+            c_notes = notes_df[notes_df["CustomerId"] == selected_id]
+            
+            # Header
+            h1, h2 = st.columns([3, 1])
+            with h1:
+                st.markdown(f"## {cust['DisplayName']}")
+                st.caption(f"ID: {selected_id}")
+            with h2:
+                view_mode = st.radio("View", ["Clean", "Raw"], horizontal=True, label_visibility="collapsed")
+                is_clean = (view_mode == "Clean")
+            
+            # Migration Control
+            if cust["Migrated"]:
+                if st.button("↩ Undo Migration", use_container_width=True):
+                    st.session_state["migrations"][selected_id] = False
+                    if db: db.collection("migrations").document(uid).collection("customers").document(selected_id).set({"migrated": False}, merge=True)
+                    st.rerun()
+            else:
+                if st.button("✅ Mark Done", type="primary", use_container_width=True):
+                    st.session_state["migrations"][selected_id] = True
+                    if db: db.collection("migrations").document(uid).collection("customers").document(selected_id).set({"migrated": True}, merge=True)
+                    st.rerun()
+            
+            st.markdown("---")
+            
+            # Fields
+            f1, f2 = st.columns(2)
+            with f1:
+                render_field("First Name", cust.get("CleanFirstName") if is_clean else "")
+                render_field("Last Name", cust.get("CleanLastName") if is_clean else "")
+                render_field("Phone", cust.get("Telephone"))
+                render_field("Email", cust.get("Email"))
+            with f2:
+                render_field("Mobile", cust.get("SMS"))
+                addr = cust.get("PhysicalAddress")
+                render_field("Address", addr)
+                
+                # Geocoding
+                if addr and "GOOGLE" in st.secrets:
+                    mgr = AddressCacheManager(db)
+                    cached = mgr.get_cached_geocoding(addr)
+                    if cached:
+                        if cached.get("valid"):
+                            st.success(f"📍 {cached.get('formatted_address')}")
+                        else:
+                            st.error("Address not found")
+                    else:
+                        if st.button("Validate Address"):
+                            geo = CachedGeocoder(st.secrets["GOOGLE"]["geocoding_api_key"], mgr)
+                            geo.geocode(addr)
+                            st.rerun()
+
+            # History Tabs
+            t1, t2 = st.tabs([f"Bookings ({len(c_bookings)})", f"Notes ({len(c_notes)})"])
+            
+            with t1:
+                if not c_bookings.empty:
+                    c_bookings = c_bookings.sort_values("StartDT", ascending=False)
+                    for _, b in c_bookings.iterrows():
+                        dstr = b["StartDT"].strftime("%d %b %Y %H:%M") if pd.notna(b["StartDT"]) else "No Date"
+                        
+                        if is_clean and "CleanFrom" in b:
+                            with st.container(border=True):
+                                st.markdown(f"**{dstr}**")
+                                cA, cB = st.columns(2)
+                                cA.markdown(f"**From:** {b['CleanFrom']}")
+                                cB.markdown(f"**To:** {b['CleanTo']}")
+                                if b['CleanNotes']: st.caption(b['CleanNotes'])
+                        else:
+                            st.text(f"{dstr}: {b.get('Notes','')}")
+                else:
+                    st.info("No bookings")
+            
+            with t2:
+                for _, n in c_notes.iterrows():
+                    st.info(n["NoteText"])
+                    
+        else:
+            st.markdown("<div style='text-align:center; color:#888; margin-top:50px;'>Select a customer</div>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
