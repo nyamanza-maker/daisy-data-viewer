@@ -228,4 +228,4 @@ def load_data(uid, _auth_instance, _storage_instance):
 
     # Defaults
     if cust is None: cust = pd.DataFrame(columns=["CustomerId", "CustomerName"])
-    if bookings is None: bookings = pd.
+    if bookings is None: bookings = pd
